@@ -33,7 +33,6 @@ def entry_point():
         if call.call not in init_functions:
             continue
         file = init_functions[call.call][1]
-        print(call.call)
         transpiled = transpiler.transpile_to_python(call.call)
         try:
             local_config = config.function_specific_configs.get(call.call)

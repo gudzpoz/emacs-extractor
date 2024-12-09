@@ -79,6 +79,8 @@ _IGNORED_ENUMS = {
     'USEFUL_PRECISION_MAX',
     # lread.c
     'word_size_log2',
+    # timefns.c
+    'flt_radix_power_size',
 }
 
 

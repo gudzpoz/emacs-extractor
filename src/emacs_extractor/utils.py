@@ -97,7 +97,7 @@ def tree_walker(tree: Node | None, callback: typing.Callable[[Node], bool]):
 
 _space = ord(' ')
 INCLUDE_PATTERN = re.compile(r'^\s*#include "(.*)"', flags=re.MULTILINE)
-
+IF_0_PATTERN = re.compile(r'^\s*#\s*if\s+0$.+?#\s*endif$', flags=re.MULTILINE | re.DOTALL)
 
 def remove_all_includes(source: str):
     encoded_source = source.encode()
@@ -114,6 +114,10 @@ def remove_all_includes(source: str):
     tree_walker(tree.root_node, remove_include)
 
     return INCLUDE_PATTERN.sub('', source_bytes.decode())
+
+
+def remove_if_0(source: str):
+    return IF_0_PATTERN.sub('', source)
 
 
 _PREPROCESSOR_REMAINS = re.compile(r'^#.*$', flags=re.MULTILINE)

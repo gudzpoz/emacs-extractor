@@ -59,19 +59,17 @@ PEValue = Union[
 PECValue = Union[PEValue | int | str]
 
 
-PE_EXTERNAL_VARS = {
-    'MOST_POSITIVE_FIXNUM': 0,
-    'MOST_NEGATIVE_FIXNUM': 0,
-    'emacs_wd': False,
-}
 PE_C_FUNCTIONS = {
     'make_string', # (const char *, ptrdiff_t)
     'make_vector', # (ptrdiff_t, Lisp_Object)
     'make_float', # (double)
     'make_fixnum', # (long)
+    'make_int', # (long)
 
     'make_symbol_constant', # (Lisp_Object)
     'make_symbol_special', # (Lisp_Object)
+
+    'make_hash_table', # (hash_table_test, int size, weakness, bool purecopy)
 
     'set_char_table_purpose', # (Lisp_Object, Lisp_Object)
     'set_char_table_defalt', # (Lisp_Object, Lisp_Object)
@@ -109,6 +107,7 @@ PE_UTIL_FUNCTIONS = {
     'list2': lambda car, cdr: PELispForm('list', [car, cdr]),
     'list3': lambda car, cdr, cddr: PELispForm('list', [car, cdr, cddr]),
     'list4': lambda car, cdr, cddr, cdddr: PELispForm('list', [car, cdr, cddr, cdddr]),
+    'listn': lambda _n, *args: PELispForm('list', list(args)),
     'nconc2': lambda car, cdr: PELispForm('nconc', [car, cdr]),
 
     # Vectors
@@ -270,11 +269,6 @@ class PartialEvaluator(dict):
             return self._watch_side_effects(rewrite)
         if key in PE_C_FUNCTIONS:
             return self._watch_side_effects(lambda *args: PECFunctionCall(key, list(args)))
-        if key in PE_EXTERNAL_VARS:
-            v = PE_EXTERNAL_VARS[key]
-            if v is None or v == False:
-                return v
-            return PECVariable(key, False)
         if key in self.lisp_variables:
             v = self.lisp_variables[key]
             # Init values

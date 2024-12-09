@@ -9,9 +9,9 @@ from tree_sitter import Query, Node
 from emacs_extractor.config import SpecificConfig
 from emacs_extractor.constants import extract_define_constants, CConstant, extract_enum_constants
 from emacs_extractor.subroutines import extract_subroutines, Subroutine
-from emacs_extractor.utils import remove_all_includes, preprocess_c, parse_c, C_LANG, require_single, require_text
+from emacs_extractor.utils import remove_all_includes, preprocess_c, parse_c, C_LANG, remove_if_0, require_single, require_text
 from emacs_extractor.variables import (
-    extract_variables, extract_symbols,
+    LispSymbol, extract_variables, extract_symbols,
     LispVariable, PerBufferVariable, CVariable,
 )
 
@@ -49,6 +49,7 @@ _INIT_FUNCTION_DEF_QUERY = Query(C_LANG, r'''
  )
 ) @node
 ''')
+PREPROC_ERROR_PATTERN = re.compile(r'#\s*error\s+')
 
 
 @dataclasses.dataclass
@@ -65,6 +66,7 @@ class EmacsExtractor:
     files: list[str]
     preprocessors: typing.Optional[str]
     init_calls: list[InitCall]
+    all_symbols: list[LispSymbol]
 
     def __init__(
             self,
@@ -80,6 +82,12 @@ class EmacsExtractor:
         self.preprocessors = preprocessors
         self.extra_constants = extra_constants or {}
         self.init_calls = self._extract_init_calls()
+        with open(Path(self.directory).joinpath('globals.h'), 'r') as f:
+            self.all_symbols = extract_symbols(f.read())
+            self.symbol_mapping = {
+                symbol.c_name: symbol
+                for symbol in self.all_symbols
+            }
 
     def _extract_init_calls(self):
         with open(Path(self.directory).joinpath(_MAIN_FUNCTION_FILE), 'r') as f:
@@ -117,10 +125,10 @@ class EmacsExtractor:
 
     def _preprocess(self, source: str, file: str):
         source = remove_all_includes(source)
+        source = PREPROC_ERROR_PATTERN.sub('// ', source)
         preprocessors = self.preprocessors
-        if file.endswith('.h'):
-            file = re.sub(r'\W', '_', file)
-            preprocessors = f'''#define EXTRACTING_{file.upper()}\n{preprocessors}'''
+        file = re.sub(r'\W', '_', file)
+        preprocessors = f'''#define EXTRACTING_{file.upper()}\n{preprocessors}'''
         source = preprocess_c(source, preprocessors)
         tree = parse_c(source.encode())
         return tree
@@ -129,15 +137,13 @@ class EmacsExtractor:
         global_constants: dict[str, typing.Any] = dict(self.extra_constants)
         files: list[FileContents] = []
         init_functions: dict[str, tuple[Node, FileContents]] = {}
-        with open(Path(self.directory).joinpath('globals.h'), 'r') as f:
-            all_symbols = extract_symbols(f.read())
         for file in self.files:
             path = Path(self.directory).joinpath(file)
             with open(path, 'r') as f:
                 source = f.read()
                 source = source.replace('#define DEFVAR_PER_BUFFER', '#define _DEFVAR_PER_BUFFER')
 
-            tree = parse_c(source.encode())
+            tree = parse_c(remove_if_0(source).encode())
 
             # Variables
             c, lisp, per_buffer = extract_variables(tree.root_node)
@@ -148,7 +154,7 @@ class EmacsExtractor:
             # #define constants
             define_constants, defined = extract_define_constants(tree.root_node, global_constants)
 
-            tree = self._preprocess(source, file)
+            tree = self._preprocess(source, path.name)
 
             # #define constants
             extract_define_constants(tree.root_node, global_constants, defined)
@@ -170,7 +176,7 @@ class EmacsExtractor:
             files.append(file_info)
 
             init_functions.update(self._extract_init_functions(tree.root_node, file_info))
-        return files, all_symbols, init_functions
+        return files, self.all_symbols, init_functions
 
     def _extract_init_functions(self, root: Node, file: FileContents):
         functions: dict[str, tuple[Node, FileContents]] = {}
@@ -181,5 +187,5 @@ class EmacsExtractor:
                 if name in self.init_function_configs:
                     config = self.init_function_configs[name]
                     if config.extra_extraction is not None:
-                        config.extra_extraction(config, root)
+                        config.extra_extraction(config, root, self.symbol_mapping)
         return functions

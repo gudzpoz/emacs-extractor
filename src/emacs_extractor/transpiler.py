@@ -102,6 +102,13 @@ class CTranspiler:
                 case 'char_literal':
                     string_builder.extend((b'ord(', node.text, b')'))
                     return False
+                case 'number_literal':
+                    text = require_text(node)
+                    if text.isdigit() and text.startswith('0') and text != '0':
+                        string_builder.append(b'0o' + node.text)
+                    else:
+                        string_builder.append(node.text)
+                    return False
                 case 'update_expression':
                     assert node.child_count == 2
                     first, second = node.children
@@ -182,9 +189,10 @@ class CTranspiler:
         for pattern in self.ignored_patterns.get(named_function, []):
             if isinstance(pattern, str):
                 pattern = (pattern, None)
-            replaces.append((re.compile(pattern[0]), pattern[1]))
+            replaces.append((re.compile(pattern[0], re.MULTILINE), pattern[1]))
         self._replaces_stack.append(replaces)
         transpiled = self._transpile_to_python(self.init_functions[named_function][0])
+        self._replaces_stack.pop()
         return '\n'.join(transpiled)
 
     def _transpile_to_python(
@@ -269,6 +277,9 @@ class CTranspiler:
                             )
                         }')
                     continue
+                case 'return_statement':
+                    value = self._transpile_expression(require_single(child.named_children))
+                    value = f'return {value}'
                 case 'expression_statement':
                     if len(child.children) == 1:
                         assert child.children[0].type == ';', child.children
@@ -293,7 +304,6 @@ class CTranspiler:
                     value = f'# {value}'
                 else:
                     value = r.sub(sub, value)
-                break
         return value
 
     def _indent(self, text: list[str] | str) -> list[str]:

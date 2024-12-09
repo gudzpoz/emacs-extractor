@@ -51,6 +51,10 @@ PATH_DATA = f'/usr/share/emacs/{EMACS_VERSION}/etc' # `data-directory`
 PATH_DOC = PATH_DATA # `doc-directory`
 PATH_EXEC = f'/usr/lib/emacs/{EMACS_VERSION}/{SYSTEM_CONFIGURATION}' # `exec-directory`
 
+# data.c
+MOST_POSITIVE_FIXNUM = 0x7fffffff # `most-positive-fixnum`
+MOST_NEGATIVE_FIXNUM = -MOST_POSITIVE_FIXNUM - 1 # `most-negative-fixnum`
+
 #############
 ### Files ###
 #############
@@ -63,7 +67,10 @@ extracted_files = [
     'character.h',
     'coding.h',
     'composite.h',
+    'dispextern.h',
     'puresize.h',
+    'syntax.h',
+    '../lib/timespec.h',
 
     'alloc.c',
     'buffer.c',
@@ -88,9 +95,20 @@ extracted_files = [
     'floatfns.c',
     'fns.c',
     'frame.c',
+    'keyboard.c',
+    'keymap.c',
     'lread.c',
+    'macros.c',
+    'minibuf.c',
     'print.c',
+    'process.c',
+    'search.c',
+    'syntax.c',
     'textprop.c',
+    'timefns.c',
+    'window.c',
+    'xdisp.c',
+    'xfaces.c',
 ]
 
 #######################
@@ -151,6 +169,7 @@ file_specific_configs = {
         # which should be done at runtime. So here we replace most of it with no-op
         # and `init_buffer_directory` to let the implementer decide what to do.
         transpile_replaces=[
+            (r'pwd=emacs_wd', 'pwd=False'),
             r'get_minibuffer\(0\)',
             r'bset_directory',
             (r'.+enable_multibyte_characters.+', r'False'),
@@ -190,6 +209,13 @@ file_specific_configs = {
             'safe_terminal_coding': PECVariable('safe_terminal_coding', False),
         },
     ),
+    # data.c
+    'syms_of_data': SpecificConfig(
+        extra_globals={
+            'MOST_POSITIVE_FIXNUM': MOST_POSITIVE_FIXNUM,
+            'MOST_NEGATIVE_FIXNUM': MOST_NEGATIVE_FIXNUM,
+        },
+    ),
     # emacs.c
     'syms_of_emacs': SpecificConfig(
         extra_globals={
@@ -206,9 +232,32 @@ file_specific_configs = {
     # frame.c
     'syms_of_frame': SpecificConfig(
         transpile_replaces=[
-            (r'^v=.+intern_c_string.+frame_parms.+builtin_lisp_symbol.+$', r'v=frame_parms[i]'),
+            (
+                r'^v=.+intern_c_string.+frame_parms.+builtin_lisp_symbol.+$',
+                r'v=frame_parms[i]',
+            ),
         ],
         extra_extraction=misc.extract_frame_parms,
+    ),
+    # keyboard.c
+    'syms_of_keyboard': SpecificConfig(
+        transpile_replaces=[
+            r'Vwhile_no_input_ignore_events=###',
+            (r'=builtin_lisp_symbol\(p->var\)', r'=p[0]'),
+            (r'=builtin_lisp_symbol\(p->kind\)', r'=p[1]'),
+            (r'^(.+)->u.s.declared_special=False', r'make_symbol_special(\1, False)'),
+            (r'lossage_limit', r'3 * MIN_NUM_RECENT_KEYS'),
+        ],
+        extra_extraction=misc.extract_keyboard_c,
+        extra_globals={
+            'XSYMBOL': lambda name: name,
+            'allocate_kboard': lambda t: PECFunctionCall('allocate_kboard', [t]),
+        },
+    ),
+    'init_while_no_input_ignore_events': SpecificConfig(
+        transpile_replaces=[
+            (r'^return (\w+)$', r'Vwhile_no_input_ignore_events=\1'),
+        ],
     ),
     # lread.c
     'init_obarray_once': SpecificConfig(
@@ -263,6 +312,31 @@ file_specific_configs = {
             'PATH_DUMPLOADSEARCH': PATH_DUMPLOADSEARCH,
         },
     ),
+    # minibuf.c
+    'init_minibuf_once': SpecificConfig(
+        extra_globals={
+            'get_minibuffer': lambda x: PECFunctionCall('get_minibuffer', [x]),
+        },
+    ),
+    # timefns.c
+    'syms_of_timefns': SpecificConfig(
+        transpile_replaces=[
+            r'flt_radix_power',
+        ],
+    ),
+    # xdisp.c
+    'syms_of_xdisp': SpecificConfig(
+        transpile_replaces=[
+            r'^echo_buffer',
+            r'^echo_area_buffer',
+        ]
+    ),
+    # xfaces.c
+    'syms_of_xfaces': SpecificConfig(
+        extra_globals={
+            'hashtest_eq': PECVariable('hashtest_eq', False),
+        },
+    ),
 }
 
 set_config(
@@ -294,19 +368,24 @@ set_config(
 #define XSETFASTINT(a, b) (a) = (b);
 #define AUTO_STRING(name, str) (name) = build_unibyte_string (str);
 #define IEEE_FLOATING_POINT 1
+
+#define XSETINT(a, b) (a) = make_fixnum(b);
 #endif
 
 #define PDUMPER_REMEMBER_SCALAR(a) ;
 #define PDUMPER_IGNORE(a) ;
+#define PDUMPER_RESET(a, b) ;
 #define PDUMPER_RESET_LV(a, b) ;
 #define pdumper_remember_lv_ptr_raw(a, b) ;
 #define pdumper_do_now_and_after_load(a) a()
+#define pdumper_do_now_and_after_late_load(a) a()
 
 #define static_assert(a) ;
 #define staticpro(a) ;
 
 // This will affect how tree-sitter parses the code.
 #define INLINE_HEADER_BEGIN ;
+#define _GL_INLINE_HEADER_BEGIN ;
 
 // buffer.c
 #ifndef EXTRACTING_BUFFER_H
@@ -316,6 +395,20 @@ set_config(
 
 // category.c
 #define MAKE_CATEGORY_SET (Fmake_bool_vector (make_fixnum (128), Qnil))
+
+// commands.h
+#define Ctl(c) ((c)&037)
+
+// keyboard.c
+#if defined EXTRACTING_KEYBOARD_C
+// Avoid an #error in keyboard.c
+#define CYGWIN
+#endif
+
+// timefns.c
+#if defined EXTRACTING_TIMEFNS_C
+#define FIXNUM_OVERFLOW_P(a) 0
+#endif
 ''',
         extra_extraction_constants={
             # Necessary for `lisp.h`
@@ -350,6 +443,23 @@ set_config(
             'init_eval',
             # init_fileio: POSIX umask?
             'init_fileio',
+            # init_keyboard: tons of event/signal bindings
+            'init_keyboard',
+            # init_syntax_once: tons of for loops
+            'init_syntax_once',
+            # init_timefns: set timezone, etc.
+            'init_timefns',
+            # init_window_once_for_pdumper: make initial frame
+            'init_window_once_for_pdumper',
+            # init_xdisp: implementation-specific initialization
+            'init_xdisp',
+            # init_xfaces: face_attr_sym?
+            'init_xfaces',
+
+            # syms_of_search_for_pdumper: implementation-specific allocation
+            'syms_of_search_for_pdumper',
+            # syms_of_timefns_for_pdumper: gmp library
+            'syms_of_timefns_for_pdumper',
         },
         function_specific_configs=file_specific_configs,
     )
