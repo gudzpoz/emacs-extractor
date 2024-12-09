@@ -7,8 +7,23 @@ from importlib.util import module_from_spec, spec_from_file_location
 
 from tree_sitter import Node
 
+from emacs_extractor.extractor import FileContents
+from emacs_extractor.partial_eval import PartialEvaluator, PEValue
 from emacs_extractor.utils import require_not_none
 from emacs_extractor.variables import LispSymbol
+
+
+@dataclass
+class InitFunction:
+    name: str
+    file: str
+    statements: list[PEValue]
+
+@dataclass
+class EmacsExtraction:
+    all_symbols: list[LispSymbol]
+    file_extractions: list[FileContents]
+    initializations: list[InitFunction]
 
 
 @dataclass
@@ -33,6 +48,12 @@ class SpecificConfig:
     ] | None = None
     '''Extra extraction logic to be run after the default extraction logic.'''
 
+    statement_remapper: typing.Callable[
+        [list[PEValue], PartialEvaluator],
+        list[PEValue]
+    ] | None = None
+    '''Rewrite the statements of the function.'''
+
 
 @dataclass
 class EmacsExtractorConfig:
@@ -55,6 +76,9 @@ class EmacsExtractorConfig:
 
     function_specific_configs: dict[str, SpecificConfig]
     '''Configuration for specific init functions.'''
+
+    finalizer: typing.Callable[[EmacsExtraction], None] | None = None
+    '''Finalizer to be run on the extraction output.'''
 
 
 _config: EmacsExtractorConfig | None = None

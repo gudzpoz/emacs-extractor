@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import typing
 
 from emacs_extractor import misc
@@ -8,8 +9,8 @@ from emacs_extractor.config import (
     get_emacs_dir,
 )
 from emacs_extractor.partial_eval import (
-    PECFunctionCall, PECVariable, PELispVariable,
-    PELispVariableAssignment,
+    PECFunctionCall, PECVariable, PELispSymbol, PELispVariable,
+    PELispVariableAssignment, PEValue, PartialEvaluator,
 )
 
 
@@ -115,6 +116,11 @@ extracted_files = [
 ### Configs & Hacks ###
 #######################
 
+@dataclass
+class BufferLocalProperty:
+    default: PEValue
+    local_flag: int
+    permanent_local_flag: int
 class InitBufferOnceBuffer(dict):
     def __init__(self, buffer: str):
         super().__init__({ '__var__': buffer })
@@ -146,6 +152,42 @@ class InitBufferOnceGlobals(dict):
                 buffer[field] = value
             return set_buffer
         raise KeyError(key)
+def remap_init_buffer_once(_, pe: PartialEvaluator) -> list[PEValue]:
+    permanent_local_flags = pe['buffer_permanent_local_flags']
+    local_flags = pe['buffer_local_flags']
+    buffer_defaults = pe['buffer_defaults']
+    buffer_local_symbols = pe['buffer_local_symbols']
+    keys = set(
+        list(permanent_local_flags.keys())
+        + list(local_flags.keys())
+        + list(buffer_defaults.keys())
+        + list(buffer_local_symbols.keys())
+    )
+    buffer_locals = []
+    def remap_int(v) -> int:
+        if v is None:
+            return 0
+        if isinstance(v, int):
+            return v
+        if isinstance(v, PECFunctionCall) and v.c_name == 'make_fixnum':
+            i = v.arguments[0]
+            assert isinstance(i, int)
+            return i
+        raise ValueError(f'Invalid buffer local flag: {v}')
+    for key in keys:
+        if key == '__var__':
+            continue
+        default_value = buffer_defaults.get(key, PELispSymbol('nil'))
+        local_flag = remap_int(local_flags.get(key, 0))
+        permanent_local_flag = remap_int(permanent_local_flags.get(key, 0))
+        buffer_locals.append(BufferLocalProperty(default_value, local_flag, permanent_local_flag))
+    init_call = PECFunctionCall(
+        'init_buffer_local_defaults', [typing.cast(typing.Any, buffer_locals)],
+    )
+    return [
+        init_call,
+        PECFunctionCall('init_buffer_once', []),
+    ]
 
 file_specific_configs = {
     # alloc.c
@@ -163,6 +205,7 @@ file_specific_configs = {
         # init_buffer_once initializes buffer-local variables,
         # including the corresponding symbols, defaults, and flags.
         extra_globals=InitBufferOnceGlobals(),
+        statement_remapper=remap_init_buffer_once,
     ),
     'init_buffer': SpecificConfig(
         # init_buffer mainly creates a scratch buffer and sets its directory,

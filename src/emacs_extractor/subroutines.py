@@ -79,7 +79,7 @@ def extract_signature(args_node: Node, doc: str):
             is_void = True
         elif type_name == 'Lisp_Object':
             declarator = arg
-            while declarator.type == 'identifier':
+            while declarator.type != 'identifier':
                 declarator = declarator.child_by_field_name('declarator')
                 assert declarator is not None
             arg_names.append(require_text(declarator))

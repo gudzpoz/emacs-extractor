@@ -6,7 +6,6 @@ from pathlib import Path
 
 from tree_sitter import Query, Node
 
-from emacs_extractor.config import SpecificConfig
 from emacs_extractor.constants import extract_define_constants, CConstant, extract_enum_constants
 from emacs_extractor.subroutines import extract_subroutines, Subroutine
 from emacs_extractor.utils import remove_all_includes, preprocess_c, parse_c, C_LANG, remove_if_0, require_single, require_text
@@ -72,7 +71,7 @@ class EmacsExtractor:
             self,
             directory: PathLike[str] | str,
             files: list[str],
-            init_function_configs: dict[str, SpecificConfig],
+            init_function_configs: dict[str, typing.Any], # use Any to avoid cyclic imports
             preprocessors: typing.Optional[str] = None,
             extra_constants: typing.Optional[dict[str, typing.Any]] = None,
     ):
