@@ -5,6 +5,8 @@ import typing
 from dataclasses import dataclass
 from importlib.util import module_from_spec, spec_from_file_location
 
+from tree_sitter import Node
+
 from emacs_extractor.utils import require_not_none
 
 
@@ -23,6 +25,9 @@ class SpecificConfig:
 
     extra_globals: dict[str, typing.Any] | None = None
     '''Extra globals to be added to the evaluation context.'''
+
+    extra_extraction: typing.Callable[['SpecificConfig', Node], None] | None = None
+    '''Extra extraction logic to be run after the default extraction logic.'''
 
 
 @dataclass
@@ -67,6 +72,7 @@ def load_config_file(python_file: str):
 
 
 _emacs_dir: Path | None = None
+
 
 def get_emacs_dir() -> Path:
     return require_not_none(_emacs_dir)

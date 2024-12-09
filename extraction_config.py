@@ -1,5 +1,6 @@
 import typing
 
+from emacs_extractor import misc
 from emacs_extractor.config import (
     EmacsExtractorConfig,
     SpecificConfig,
@@ -79,11 +80,16 @@ extracted_files = [
     'comp.c',
     'composite.c',
     'data.c',
+    'doc.c',
+    'editfns.c',
     'emacs.c',
     'eval.c',
     'fileio.c',
+    'floatfns.c',
     'fns.c',
+    'frame.c',
     'lread.c',
+    'print.c',
     'textprop.c',
 ]
 
@@ -197,6 +203,13 @@ file_specific_configs = {
             'emacs_bugreport': REPORT_BUG_ADDRESS,
         },
     ),
+    # frame.c
+    'syms_of_frame': SpecificConfig(
+        transpile_replaces=[
+            (r'^v=.+intern_c_string.+frame_parms.+builtin_lisp_symbol.+$', r'v=frame_parms[i]'),
+        ],
+        extra_extraction=misc.extract_frame_parms,
+    ),
     # lread.c
     'init_obarray_once': SpecificConfig(
         # init_obarray_once initializes the global obarray and the two special symbols:
@@ -284,6 +297,8 @@ set_config(
 #endif
 
 #define PDUMPER_REMEMBER_SCALAR(a) ;
+#define PDUMPER_IGNORE(a) ;
+#define PDUMPER_RESET_LV(a, b) ;
 #define pdumper_remember_lv_ptr_raw(a, b) ;
 #define pdumper_do_now_and_after_load(a) a()
 
@@ -326,6 +341,8 @@ set_config(
             'init_casetab_once',
             # init_coding_once: coding categories, iso-2022, mule, etc.
             'init_coding_once',
+            # init_editfns: user login names, etc.
+            'init_editfns',
             # init_eval_once only initializes a local Lisp_Object (Vrun_hooks),
             # and call init_eval_once_for_pdumper to init specpdl.
             'init_eval_once',

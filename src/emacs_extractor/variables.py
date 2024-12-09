@@ -146,7 +146,7 @@ def extract_variables(root_node: Node):
             ))
         else:
             matches = _DEFVAR_GLOBAL_CAPTURE_QUERY.matches(node)
-            assert len(matches) == 1, node.text
+            assert len(matches) == 1, require_text(node)
             _, match = matches[0]
             kind = typing.cast(LISP_VAR_TYPES, kind)
             lisp_variables.append(LispVariable(

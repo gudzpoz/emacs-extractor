@@ -96,6 +96,7 @@ def tree_walker(tree: Node | None, callback: typing.Callable[[Node], bool]):
 
 
 _space = ord(' ')
+INCLUDE_PATTERN = re.compile(r'^\s*#include "(.*)"', flags=re.MULTILINE)
 
 
 def remove_all_includes(source: str):
@@ -112,7 +113,7 @@ def remove_all_includes(source: str):
         return True
     tree_walker(tree.root_node, remove_include)
 
-    return source_bytes.decode()
+    return INCLUDE_PATTERN.sub('', source_bytes.decode())
 
 
 _PREPROCESSOR_REMAINS = re.compile(r'^#.*$', flags=re.MULTILINE)

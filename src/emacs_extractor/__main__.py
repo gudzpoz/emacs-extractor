@@ -17,6 +17,7 @@ def entry_point():
     extractor = EmacsExtractor(
         args.src_dir,
         config.files,
+        config.function_specific_configs,
         config.extra_macros,
         config.extra_extraction_constants,
     )

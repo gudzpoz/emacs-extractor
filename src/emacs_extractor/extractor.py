@@ -6,13 +6,13 @@ from pathlib import Path
 
 from tree_sitter import Query, Node
 
+from emacs_extractor.config import SpecificConfig
 from emacs_extractor.constants import extract_define_constants, CConstant, extract_enum_constants
 from emacs_extractor.subroutines import extract_subroutines, Subroutine
 from emacs_extractor.utils import remove_all_includes, preprocess_c, parse_c, C_LANG, require_single, require_text
 from emacs_extractor.variables import (
     extract_variables, extract_symbols,
     LispVariable, PerBufferVariable, CVariable,
-    LispSymbol,
 )
 
 
@@ -70,11 +70,13 @@ class EmacsExtractor:
             self,
             directory: PathLike[str] | str,
             files: list[str],
+            init_function_configs: dict[str, SpecificConfig],
             preprocessors: typing.Optional[str] = None,
             extra_constants: typing.Optional[dict[str, typing.Any]] = None,
     ):
         self.directory = directory
         self.files = files
+        self.init_function_configs = init_function_configs
         self.preprocessors = preprocessors
         self.extra_constants = extra_constants or {}
         self.init_calls = self._extract_init_calls()
@@ -170,11 +172,14 @@ class EmacsExtractor:
             init_functions.update(self._extract_init_functions(tree.root_node, file_info))
         return files, all_symbols, init_functions
 
-    @classmethod
-    def _extract_init_functions(cls, root: Node, file: FileContents):
+    def _extract_init_functions(self, root: Node, file: FileContents):
         functions: dict[str, tuple[Node, FileContents]] = {}
         for _, match in _INIT_FUNCTION_DEF_QUERY.matches(root):
             name = require_text(match['init'])
             if name.startswith('init_') or name.startswith('syms_of_'):
                 functions[name] = (require_single(match['node']), file)
+                if name in self.init_function_configs:
+                    config = self.init_function_configs[name]
+                    if config.extra_extraction is not None:
+                        config.extra_extraction(config, root)
         return functions

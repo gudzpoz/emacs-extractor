@@ -142,6 +142,7 @@ class PartialEvaluator(dict):
     """All Lisp symbols in all files."""
 
     lisp_functions: dict[str, Subroutine]
+    """All Lisp functions in all files."""
 
     c_variables: dict[str, CVariable]
     """All C global variables in all files."""
@@ -281,6 +282,7 @@ class PartialEvaluator(dict):
                 return False
             if v.lisp_type == 'INT':
                 return 0
+            return PELispVariable(v.lisp_name)
         if key in self._extra_globals:
             v = self._extra_globals[key]
             return self._watch_side_effects(v)

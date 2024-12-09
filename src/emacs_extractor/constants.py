@@ -75,6 +75,8 @@ _IGNORED_ENUMS = {
     'BUFFER_REST_SIZE',
     # composite.c
     'GLYPH_LEN_MAX',
+    # editfns.c
+    'USEFUL_PRECISION_MAX',
     # lread.c
     'word_size_log2',
 }
