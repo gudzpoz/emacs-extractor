@@ -1,0 +1,9 @@
+#+title: emacs-extractor
+
+This is a set of simple python scripts to extract emacs C definitions from Emacs source code,
+including:
+
+- Constants defined by =#define= or =enum=
+- Various varaibles, including those define by =DEFVAR_*= or C global =Lisp_Object= variables.
+- Symbols defined by =DEFSYM=.
+- Subroutines defined by =DEFUN= or =defun=, exported by =defsubr=.
