@@ -22,8 +22,14 @@ class InitFunction:
 @dataclass
 class EmacsExtraction:
     all_symbols: list[LispSymbol]
+    '''All symbols defined in `globals.h`.'''
+
     file_extractions: list[FileContents]
+    '''All the extracted files.'''
+
     initializations: list[InitFunction]
+    '''An AST-ish thing of the initialization functions called in `main` in `emacs.c`,
+    in the order they are called.'''
 
 
 @dataclass
@@ -60,7 +66,7 @@ class EmacsExtractorConfig:
     '''Configuration for the Emacs Extractor.'''
 
     files: list[str]
-    '''File names to be extracted.'''
+    '''File names of the files to extract from.'''
 
     extra_macros: str
     '''Extra macros (or any string) to be prepended to each file when extracting & executing code.'''
@@ -76,9 +82,6 @@ class EmacsExtractorConfig:
 
     function_specific_configs: dict[str, SpecificConfig]
     '''Configuration for specific init functions.'''
-
-    finalizer: typing.Callable[[EmacsExtraction], None] | None = None
-    '''Finalizer to be run on the extraction output.'''
 
 
 _config: EmacsExtractorConfig | None = None
@@ -109,3 +112,32 @@ def set_emacs_dir(emacs_dir: str):
     global _emacs_dir
     _emacs_dir = Path(emacs_dir)
     assert _emacs_dir.exists() and _emacs_dir.is_dir()
+
+
+_unknown_cmd_flags: list[str] = []
+
+
+def get_unknown_cmd_flags() -> list[str]:
+    return _unknown_cmd_flags
+
+def set_unknown_cmd_flags(flags: list[str]):
+    global _unknown_cmd_flags
+    _unknown_cmd_flags = flags
+
+
+_finalizer: typing.Callable[[EmacsExtraction], None] | None = None
+
+
+def get_finalizer():
+    return _finalizer
+
+def set_finalizer(finalizer: typing.Callable[[EmacsExtraction], None]):
+    global _finalizer
+    _finalizer = finalizer
+
+def load_finalizer_file(python_file: str):
+    spec = spec_from_file_location('finalizer', python_file)
+    assert spec is not None
+    module = module_from_spec(spec)
+    sys.modules['finalizer'] = module
+    require_not_none(spec.loader).exec_module(module)

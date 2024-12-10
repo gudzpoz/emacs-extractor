@@ -18,11 +18,22 @@ from emacs_extractor.variables import (
 @dataclasses.dataclass
 class FileContents:
     file: Path
+
     lisp_variables: list[LispVariable]
+    '''Lisp variables defined in this file via `DEFVAR_*` macros.'''
+
     per_buffer_variables: list[PerBufferVariable]
+    '''Lisp variables defined in this file via `DEFVAR_PER_BUFFER` macros.
+    Currently it seems only `buffer.c` uses this macro.'''
+
     c_variables: list[CVariable]
+    '''C Lisp_Object variables defined in this file.'''
+
     constants: list[CConstant]
+    '''C constants defined in this file, either defined with `#define` or enums.'''
+
     functions: list[Subroutine]
+    '''Lisp subroutines defined in this file via `DEFUN`.'''
 
 
 _MAIN_FUNCTION_FILE = 'emacs.c'

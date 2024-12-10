@@ -1,14 +1,10 @@
-from dataclasses import dataclass
-from emacs_extractor.config import EmacsExtraction, InitFunction, get_config, get_emacs_dir
+from emacs_extractor.config import (
+    EmacsExtraction, InitFunction,
+    get_config, get_emacs_dir, get_finalizer,
+)
 from emacs_extractor.extractor import EmacsExtractor
-from emacs_extractor.partial_eval import PECVariableAssignment, PartialEvaluator, PEValue
+from emacs_extractor.partial_eval import PartialEvaluator
 from emacs_extractor.transpiler import CTranspiler
-
-
-def meaningful(statement: PEValue) -> bool:
-    if isinstance(statement, PECVariableAssignment):
-        return not (isinstance(statement.value, int) and statement.local)
-    return True
 
 
 def extract() -> EmacsExtraction:
@@ -44,7 +40,6 @@ def extract() -> EmacsExtraction:
                 file,
                 extra_globals or {},
             )
-            statements = [s for s in statements if s is not None and meaningful(s)]
             if local_config and local_config.statement_remapper:
                 statements = local_config.statement_remapper(statements, pe)
             initializations.append(InitFunction(call.call, file.file.name, statements))
@@ -54,11 +49,14 @@ def extract() -> EmacsExtraction:
                 print(f'{i + 1:4d}: {line}')
             raise e
 
-    extraction = EmacsExtraction(
+    return EmacsExtraction(
         all_symbols=all_symbols,
         file_extractions=files,
         initializations=initializations,
     )
-    if config.finalizer:
-        config.finalizer(extraction)
-    return extraction
+
+
+def finalize(extraction: EmacsExtraction) -> None:
+    finalizer = get_finalizer()
+    if finalizer:
+        finalizer(extraction)

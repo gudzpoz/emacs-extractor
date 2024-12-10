@@ -7,42 +7,36 @@ from emacs_extractor.subroutines import Subroutine
 from emacs_extractor.variables import CVariable, LispSymbol, LispVariable
 
 
-class IdHash:
-    def __eq__(self, value: object) -> bool:
-        return id(self) == id(value)
-    def __hash__(self) -> int:
-        return id(self)
-
 @dataclass(eq=False)
-class PELispVariable(IdHash):
+class PELispVariable:
     lisp_name: str
 
 @dataclass(eq=False)
-class PECVariable(IdHash):
+class PECVariable:
     c_name: str
     local: bool
 
 @dataclass(eq=False)
-class PELispSymbol(IdHash):
+class PELispSymbol:
     lisp_name: str
 
 @dataclass(eq=False)
-class PELispForm(IdHash):
+class PELispForm:
     function: str
     arguments: list['PEValue']
 
 @dataclass(eq=False)
-class PECFunctionCall(IdHash):
+class PECFunctionCall:
     c_name: str
     arguments: list['PECValue']
 
 @dataclass(eq=False)
-class PELispVariableAssignment(IdHash):
+class PELispVariableAssignment:
     lisp_name: str
     value: 'PEValue'
 
 @dataclass(eq=False)
-class PECVariableAssignment(IdHash):
+class PECVariableAssignment:
     c_name: str
     value: 'PECValue'
     local: bool
@@ -56,7 +50,7 @@ PEValue = Union[
     PELispVariableAssignment,
     PECVariableAssignment,
 ]
-PECValue = Union[PEValue | int | str]
+PECValue = Union[PEValue | int | str | float | bool]
 
 
 PE_C_FUNCTIONS = {
@@ -123,7 +117,9 @@ PE_UTIL_FUNCTIONS = {
     'AREF': lambda vec, index: PELispForm('aref', [vec, index]),
 
     # Char-tables
-    'CHAR_TABLE_SET': lambda table, index, value: PELispForm
+    'CHAR_TABLE_SET': lambda table, index, value: PECFunctionCall(
+        'char_table_set', [table, index, value],
+    ),
 }
 
 
@@ -149,9 +145,6 @@ class PartialEvaluator(dict):
     _current: FileContents
     """The current file being evaluated."""
 
-    _initialization: dict[str, PEValue]
-    """Initialization forms for the current file."""
-
     _static_variables: dict[str, CVariable]
     """Static C variables in the current file."""
 
@@ -165,7 +158,7 @@ class PartialEvaluator(dict):
     _evaluated: list[PEValue | None]
     """All evaluated forms."""
 
-    _potential_side_effects: dict[Any, int]
+    _potential_side_effects: dict[int, int]
     """All forms that may have side effects.
 
     Some of them are to be removed after getting incorporated into other forms.
@@ -203,14 +196,12 @@ class PartialEvaluator(dict):
             'CALLMANY': lambda f, args: f(*args),
         }
         self._extra_globals = {}
-        self._initialization = {}
         self._static_variables = {}
         self._local_variables = set()
         self._evaluated = []
         self._potential_side_effects = {}
 
     def reset(self, current: FileContents, extra: dict[str, Any]):
-        self._initialization = {}
         self.clear()
         self._current = current
         self._extra_globals = extra
@@ -218,6 +209,13 @@ class PartialEvaluator(dict):
         self._local_variables = set()
         self._evaluated = []
         self._potential_side_effects = {}
+
+    def _remove_side_effects(self, v: Any):
+        if not is_dataclass(v):
+            return
+        i = self._potential_side_effects.pop(id(v), None)
+        if i is not None:
+            self._evaluated[i] = None
 
     def _walk_remove_side_effect(self, v: Any):
         if not is_dataclass(v) or isinstance(v, type):
@@ -229,21 +227,22 @@ class PartialEvaluator(dict):
                 continue
             children = f if isinstance(f, list) else [f]
             for child in children:
-                if not is_dataclass(child):
-                    continue
-                i = self._potential_side_effects.pop(child, None)
-                if i is not None:
-                    self._evaluated[i] = None
-        index = len(self._evaluated)
-        self._evaluated.append(cast(Any, v))
-        self._potential_side_effects[v] = index
+                self._remove_side_effects(child)
+        self._remove_side_effects(v)
 
     def _watch_side_effects(self, v: Callable):
         if callable(v):
             def wrapper(*args):
                 nonlocal v
                 result = v(*args)
-                self._walk_remove_side_effect(result)
+                for arg in args:
+                    self._walk_remove_side_effect(arg)
+                if (is_dataclass(result) and not isinstance(result, type)
+                    and id(result) not in self._potential_side_effects
+                ):
+                    index = len(self._evaluated)
+                    self._evaluated.append(cast(Any, result))
+                    self._potential_side_effects[id(result)] = index
                 return result
             return wrapper
         return v
@@ -281,33 +280,59 @@ class PartialEvaluator(dict):
             v = self._extra_globals[key]
             return self._watch_side_effects(v)
         if key in self._globals:
-            return self._globals[key]
+            return self._watch_side_effects(self._globals[key])
         raise KeyError(key)
 
+    def _to_simple(self, v: Any) -> tuple[Any, bool]:
+        if isinstance(v, PELispSymbol):
+            if v.lisp_name == 't':
+                v = True
+            elif v.lisp_name == 'nil':
+                v = False
+        if isinstance(v, (int, float, bool)):
+            return v, True
+        return v, False
+
     def __setitem__(self, key: str, value: Any) -> None:
-        local = False
+        self._walk_remove_side_effect(value)
         if key in self.lisp_variables:
-            self._initialization[key] = value
-            self._evaluated.append(
-                PELispVariableAssignment(self.lisp_variables[key].lisp_name, value),
-            )
+            var = self.lisp_variables[key]
+            init = False
+            if var.init_value is None:
+                simplified, is_simple = self._to_simple(value)
+                if is_simple:
+                    value = simplified
+                    var.init_value = simplified
+                    init = True
+            if not init:
+                self._evaluated.append(
+                    PELispVariableAssignment(self.lisp_variables[key].lisp_name, value),
+                )
             recorded = PELispVariable(self.lisp_variables[key].lisp_name)
         elif key in self.c_variables:
-            self._initialization[key] = value
             self._evaluated.append(PECVariableAssignment(key, value, False))
             recorded = PECVariable(self.c_variables[key].c_name, False)
         else:
-            local = True
             self._local_variables.add(key)
-            self._initialization[key] = value
-            if is_dataclass(value):
+            if is_dataclass(value) and not isinstance(value, PELispSymbol):
                 recorded = PECVariable(key, True)
+                self._evaluated.append(PECVariableAssignment(key, cast(Any, value), True))
             else:
                 recorded = value
-            self._evaluated.append(PECVariableAssignment(key, cast(Any, value), local))
         return super(PartialEvaluator, self).__setitem__(key, recorded)
+
+    @classmethod
+    def _pe_constant(cls, statement: PECValue):
+        if isinstance(statement, PECVariableAssignment):
+            if statement.local and not is_dataclass(statement.value):
+                return True
+        return False
 
     def evaluate(self, code: str, current: FileContents, extra_globals: dict[str, Any]):
         self.reset(current, extra_globals)
         exec(code, self)
-        return self._evaluated
+        return [
+            statement
+            for statement in self._evaluated
+            if statement is not None and not self._pe_constant(statement)
+        ]

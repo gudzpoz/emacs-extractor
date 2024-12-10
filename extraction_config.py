@@ -1,5 +1,6 @@
-from dataclasses import dataclass
+import sys
 import typing
+from dataclasses import dataclass
 
 from emacs_extractor import misc
 from emacs_extractor.config import (
@@ -39,9 +40,11 @@ def extract_emacs_version():
     if ')' not in line:
         line += ')'
     line = line.replace('[', '\'').replace(']', '\'')
-    return eval(line, {
+    version = eval(line, {
         'AC_INIT': lambda *args: args[1],
     })
+    print(f'Extracting from GNU Emacs {version}', file=sys.stderr)
+    return version
 
 EMACS_VERSION = extract_emacs_version() # `emacs-version`
 REPORT_BUG_ADDRESS = '' # `report-emacs-bug-address`
@@ -66,6 +69,7 @@ extracted_files = [
     'buffer.h',
     'category.h',
     'character.h',
+    'charset.h',
     'coding.h',
     'composite.h',
     'dispextern.h',
@@ -82,6 +86,7 @@ extracted_files = [
     'category.c',
     'ccl.c',
     'character.c',
+    'charset.c',
     'chartab.c',
     'cmds.c',
     'coding.c',
@@ -115,6 +120,13 @@ extracted_files = [
 #######################
 ### Configs & Hacks ###
 #######################
+
+# BufferLocalProperty, InitializeBufferOnce, InitializeBufferOnceGlobals:
+# Emacs uses a `struct buffer` to store default values for buffer-locals.
+# However, different implementations might want to differ from this,
+# so all these classes serve to extract the defaults (and flags) from Emacs.
+# One may get the extracted information by reinterpreting the args of
+# the generated `init_buffer_local_defaults` function.
 
 @dataclass
 class BufferLocalProperty:
@@ -239,6 +251,17 @@ file_specific_configs = {
             'PATH_EXEC': PATH_EXEC,
         },
     ),
+    # charset.c
+    'syms_of_charset': SpecificConfig(
+        transpile_replaces=[
+            r'charset_table_init',
+        ],
+        extra_globals={
+            'define_charset_internal': lambda *args: PECFunctionCall(
+                'define_charset_internal', [*args],
+            ),
+        },
+    ),
     # coding.c
     'syms_of_coding': SpecificConfig(
         transpile_replaces=[
@@ -251,6 +274,12 @@ file_specific_configs = {
             ),
             'safe_terminal_coding': PECVariable('safe_terminal_coding', False),
         },
+    ),
+    # comp.c
+    'syms_of_comp': SpecificConfig(
+        transpile_replaces=[
+            r'^comp\.',
+        ],
     ),
     # data.c
     'syms_of_data': SpecificConfig(
@@ -361,6 +390,13 @@ file_specific_configs = {
             'get_minibuffer': lambda x: PECFunctionCall('get_minibuffer', [x]),
         },
     ),
+    # process.c
+    'syms_of_process': SpecificConfig(
+        transpile_replaces=[
+            r'sopt->',
+            r'socket_options',
+        ],
+    ),
     # timefns.c
     'syms_of_timefns': SpecificConfig(
         transpile_replaces=[
@@ -442,11 +478,17 @@ set_config(
 // commands.h
 #define Ctl(c) ((c)&037)
 
+// comp.c
+#define HAVE_NATIVE_COMP 1
+
 // keyboard.c
 #if defined EXTRACTING_KEYBOARD_C
 // Avoid an #error in keyboard.c
 #define CYGWIN
 #endif
+
+// process.c
+#define subprocesses 1
 
 // timefns.c
 #if defined EXTRACTING_TIMEFNS_C
@@ -475,6 +517,10 @@ set_config(
             'init_callproc',
             # init_casetab_once: we don't want to explode the for loop...
             'init_casetab_once',
+            # init_charset_once: charsets are too complex
+            'init_charset_once',
+            # init_charset: charset data paths
+            'init_charset',
             # init_coding_once: coding categories, iso-2022, mule, etc.
             'init_coding_once',
             # init_editfns: user login names, etc.
@@ -505,5 +551,5 @@ set_config(
             'syms_of_timefns_for_pdumper',
         },
         function_specific_configs=file_specific_configs,
-    )
+    ),
 )

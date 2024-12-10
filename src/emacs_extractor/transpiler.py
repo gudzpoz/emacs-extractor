@@ -180,7 +180,7 @@ class CTranspiler:
                 string_builder.append(node.text)
             return True
         tree_walker(expression, walk_expression)
-        return b''.join(string_builder).decode().replace(';', '')
+        return b''.join(string_builder).decode().strip(';')
 
     def transpile_to_python(self, named_function: str) -> str:
         if named_function in self.ignored_functions:
@@ -255,10 +255,13 @@ class CTranspiler:
                     if init is not None:
                         results.append(self._transpile_expression(init))
                     condition = child.child_by_field_name('condition')
-                    if condition is not None:
-                        results.append(f'while ({self._transpile_expression(condition)}):')
-                    else:
-                        results.append('while True:')
+                    while_loop = f'''while {
+                        'True' if condition is None
+                        else self._transpile_expression(condition)
+                    }:'''
+                    replaced = self._try_replace(while_loop)
+                    commented = len(results) if replaced.startswith('#') else -1
+                    results.append(replaced)
                     self._indentations.append(4)
                     body = require_not_none(child.child_by_field_name('body'))
                     results.extend(self._indent(self._transpile_to_python(body)))
@@ -266,6 +269,9 @@ class CTranspiler:
                     if update is not None:
                         results.extend(self._indent(self._transpile_expression(update)))
                     self._indentations.pop()
+                    if commented >= 0:
+                        for i in range(commented, len(results)):
+                            results[i] = f'# {results[i]}'
                     continue
                 case 'enum_specifier':
                     for child in require_not_none(child.child_by_field_name('body')).named_children:
