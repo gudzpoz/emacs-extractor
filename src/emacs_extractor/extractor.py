@@ -83,12 +83,14 @@ class EmacsExtractor:
             directory: PathLike[str] | str,
             files: list[str],
             init_function_configs: dict[str, typing.Any], # use Any to avoid cyclic imports
+            ignored_constants: set[str],
             preprocessors: typing.Optional[str] = None,
             extra_constants: typing.Optional[dict[str, typing.Any]] = None,
     ):
         self.directory = directory
         self.files = files
         self.init_function_configs = init_function_configs
+        self.ignored_constants = ignored_constants
         self.preprocessors = preprocessors
         self.extra_constants = extra_constants or {}
         self.init_calls = self._extract_init_calls()
@@ -170,7 +172,7 @@ class EmacsExtractor:
             extract_define_constants(tree.root_node, global_constants, defined)
 
             # Enum constants
-            enum_constants = extract_enum_constants(tree.root_node, global_constants)
+            enum_constants = extract_enum_constants(tree.root_node, global_constants, self.ignored_constants)
             file_constants = enum_constants + define_constants
             if file.endswith('.h'):
                 global_constants.update({c.name: c.value for c in file_constants})

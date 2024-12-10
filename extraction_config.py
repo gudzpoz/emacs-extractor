@@ -1,6 +1,6 @@
 import sys
-import typing
 from dataclasses import dataclass
+from typing import Any, cast
 
 from emacs_extractor import misc
 from emacs_extractor.config import (
@@ -10,7 +10,7 @@ from emacs_extractor.config import (
     get_emacs_dir,
 )
 from emacs_extractor.partial_eval import (
-    PECFunctionCall, PECVariable, PELispSymbol, PELispVariable,
+    PECFunctionCall, PECVariable, PELispForm, PELispSymbol, PELispVariable,
     PELispVariableAssignment, PEValue, PartialEvaluator,
 )
 
@@ -121,6 +121,78 @@ extracted_files = [
 ### Configs & Hacks ###
 #######################
 
+# During partial evaluation, calls to these functions will be turned into
+# `PECFunctionCall` objects.
+PE_C_FUNCTIONS = {
+    'make_string', # (const char *, ptrdiff_t)
+    'make_vector', # (ptrdiff_t, Lisp_Object)
+    'make_float', # (double)
+    'make_fixnum', # (long)
+    'make_int', # (long)
+
+    'make_symbol_constant', # (Lisp_Object)
+    'make_symbol_special', # (Lisp_Object)
+
+    'make_hash_table', # (hash_table_test, int size, weakness, bool purecopy)
+
+    'set_char_table_purpose', # (Lisp_Object, Lisp_Object)
+    'set_char_table_defalt', # (Lisp_Object, Lisp_Object)
+    'char_table_set_range', # (Lisp_Object, int, int, Lisp_Object)
+
+    'decode_env_path', # (const char * env_name, const char *default, bool empty)
+}
+
+# Emacs uses a bunch of utility functions. To avoid having to implement all these
+# functions in the finalizer, we try to turn them into lisp subroutine calls or
+# other C function calls.
+# Also, we are treating pure objects as normal objects.
+PE_UTIL_FUNCTIONS = {
+    # Strings
+    'make_pure_string': lambda s, nchars, _nbytes, _multibyte: PECFunctionCall(
+        'make_string',
+        [s, nchars], # TODO: multibyte flag?
+    ),
+    'build_pure_c_string': lambda s: PECFunctionCall(
+        'make_string',
+        [cast(str, s), len(cast(str, s).encode())],
+    ),
+    'build_unibyte_string': lambda s: PECFunctionCall('make_string', [s, len(s)]),
+    'build_string': lambda s: PECFunctionCall('make_string', [s, len(s.encode())]),
+
+    # Symbols
+    'intern_c_string': lambda s: PELispSymbol(s),
+    'intern': lambda s: PELispSymbol(s),
+
+    # Lists
+    'pure_cons': lambda car, cdr: PELispForm('cons', [car, cdr]),
+    'pure_list': lambda *args: PELispForm(
+        'list', list(cast(list[PEValue], args)),
+    ),
+    'list1': lambda car: PELispForm('list', [car]),
+    'list2': lambda car, cdr: PELispForm('list', [car, cdr]),
+    'list3': lambda car, cdr, cddr: PELispForm('list', [car, cdr, cddr]),
+    'list4': lambda car, cdr, cddr, cdddr: PELispForm('list', [car, cdr, cddr, cdddr]),
+    'listn': lambda _n, *args: PELispForm('list', list(args)),
+    'nconc2': lambda car, cdr: PELispForm('nconc', [car, cdr]),
+
+    # Vectors
+    'make_pure_vector': lambda n: PECFunctionCall(
+        'make_vector',
+        [n, PELispSymbol('nil')],
+    ),
+    'make_nil_vector': lambda n: PECFunctionCall(
+        'make_vector',
+        [n, PELispSymbol('nil')],
+    ),
+    'ASET': lambda vec, index, value: PELispForm('aset', [vec, index, value]),
+    'AREF': lambda vec, index: PELispForm('aref', [vec, index]),
+
+    # Char-tables
+    'CHAR_TABLE_SET': lambda table, index, value: PECFunctionCall(
+        'char_table_set', [table, index, value],
+    ),
+}
+
 # BufferLocalProperty, InitializeBufferOnce, InitializeBufferOnceGlobals:
 # Emacs uses a `struct buffer` to store default values for buffer-locals.
 # However, different implementations might want to differ from this,
@@ -154,13 +226,14 @@ class InitBufferOnceGlobals(dict):
             'set_buffer_intervals': lambda buffer, intervals: PECFunctionCall(
                 'set_buffer_intervals', [buffer['__var__'], intervals],
             ),
+            'memset': lambda *args: None,
         })
     def __contains__(self, key: str) -> bool:
         return super().__contains__(key) or key.startswith('bset_')
     def __missing__(self, key: str):
         if key.startswith('bset_'):
             field = key[5:]
-            def set_buffer(buffer: dict[str, typing.Any], value: typing.Any):
+            def set_buffer(buffer: dict[str, Any], value: Any):
                 buffer[field] = value
             return set_buffer
         raise KeyError(key)
@@ -194,7 +267,7 @@ def remap_init_buffer_once(_, pe: PartialEvaluator) -> list[PEValue]:
         permanent_local_flag = remap_int(permanent_local_flags.get(key, 0))
         buffer_locals.append(BufferLocalProperty(default_value, local_flag, permanent_local_flag))
     init_call = PECFunctionCall(
-        'init_buffer_local_defaults', [typing.cast(typing.Any, buffer_locals)],
+        'init_buffer_local_defaults', [cast(Any, buffer_locals)],
     )
     return [
         init_call,
@@ -346,7 +419,7 @@ file_specific_configs = {
             'defsym_name': [None] * 10000,
             'XBARE_SYMBOL': lambda name: name,
             'SET_SYMBOL_VAL': lambda name, value: PELispVariableAssignment(
-                typing.cast(PELispVariable, name).lisp_name, value,
+                cast(PELispVariable, name).lisp_name, value,
             ),
         },
     ),
@@ -510,6 +583,27 @@ set_config(
             'MANY': -1,
             'NULL': 0,
         },
+        ignored_constants={
+            # lisp.h
+            'Lisp_Type',
+            'NIL_IS_ZERO',
+            'SUB_CHAR_TABLE_OFFSET',
+            'USE_STACK_CONS',
+            'USE_STACK_STRING',
+            # alloc.c
+            'roundup_size',
+            # buffer.h
+            'BUFFER_LISP_SIZE',
+            'BUFFER_REST_SIZE',
+            # composite.c
+            'GLYPH_LEN_MAX',
+            # editfns.c
+            'USEFUL_PRECISION_MAX',
+            # lread.c
+            'word_size_log2',
+            # timefns.c
+            'flt_radix_power_size',
+        },
         ignored_functions={
             # init_eval_once_for_pdumper: pure region init?
             'init_alloc_once_for_pdumper',
@@ -550,6 +644,8 @@ set_config(
             # syms_of_timefns_for_pdumper: gmp library
             'syms_of_timefns_for_pdumper',
         },
+        pe_c_functions=PE_C_FUNCTIONS,
+        pe_util_functions=PE_UTIL_FUNCTIONS,
         function_specific_configs=file_specific_configs,
     ),
 )

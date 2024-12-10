@@ -7,35 +7,35 @@ from emacs_extractor.subroutines import Subroutine
 from emacs_extractor.variables import CVariable, LispSymbol, LispVariable
 
 
-@dataclass(eq=False)
+@dataclass
 class PELispVariable:
     lisp_name: str
 
-@dataclass(eq=False)
+@dataclass
 class PECVariable:
     c_name: str
     local: bool
 
-@dataclass(eq=False)
+@dataclass
 class PELispSymbol:
     lisp_name: str
 
-@dataclass(eq=False)
+@dataclass
 class PELispForm:
     function: str
     arguments: list['PEValue']
 
-@dataclass(eq=False)
+@dataclass
 class PECFunctionCall:
     c_name: str
     arguments: list['PECValue']
 
-@dataclass(eq=False)
+@dataclass
 class PELispVariableAssignment:
     lisp_name: str
     value: 'PEValue'
 
-@dataclass(eq=False)
+@dataclass
 class PECVariableAssignment:
     c_name: str
     value: 'PECValue'
@@ -51,76 +51,6 @@ PEValue = Union[
     PECVariableAssignment,
 ]
 PECValue = Union[PEValue | int | str | float | bool]
-
-
-PE_C_FUNCTIONS = {
-    'make_string', # (const char *, ptrdiff_t)
-    'make_vector', # (ptrdiff_t, Lisp_Object)
-    'make_float', # (double)
-    'make_fixnum', # (long)
-    'make_int', # (long)
-
-    'make_symbol_constant', # (Lisp_Object)
-    'make_symbol_special', # (Lisp_Object)
-
-    'make_hash_table', # (hash_table_test, int size, weakness, bool purecopy)
-
-    'set_char_table_purpose', # (Lisp_Object, Lisp_Object)
-    'set_char_table_defalt', # (Lisp_Object, Lisp_Object)
-    'char_table_set_range', # (Lisp_Object, int, int, Lisp_Object)
-
-    'decode_env_path', # (const char * env_name, const char *default, bool empty)
-
-    'malloc', # (size_t)
-    'memset', # (void *, int, size_t)
-}
-# We are treating pure objects as normal objects.
-PE_UTIL_FUNCTIONS = {
-    # Strings
-    'make_pure_string': lambda s, nchars, _nbytes, _multibyte: PECFunctionCall(
-        'make_string',
-        [s, nchars],
-    ),
-    'build_pure_c_string': lambda s: PECFunctionCall(
-        'make_string',
-        [cast(str, s), len(cast(str, s).encode())],
-    ),
-    'build_unibyte_string': lambda s: PECFunctionCall('make_string', [s, len(s)]),
-    'build_string': lambda s: PECFunctionCall('make_string', [s, len(s.encode())]),
-
-    # Symbols
-    'intern_c_string': lambda s: PELispSymbol(s),
-    'intern': lambda s: PELispSymbol(s),
-
-    # Lists
-    'pure_cons': lambda car, cdr: PELispForm('cons', [car, cdr]),
-    'pure_list': lambda *args: PELispForm(
-        'list', list(cast(list[PEValue], args)),
-    ),
-    'list1': lambda car: PELispForm('list', [car]),
-    'list2': lambda car, cdr: PELispForm('list', [car, cdr]),
-    'list3': lambda car, cdr, cddr: PELispForm('list', [car, cdr, cddr]),
-    'list4': lambda car, cdr, cddr, cdddr: PELispForm('list', [car, cdr, cddr, cdddr]),
-    'listn': lambda _n, *args: PELispForm('list', list(args)),
-    'nconc2': lambda car, cdr: PELispForm('nconc', [car, cdr]),
-
-    # Vectors
-    'make_pure_vector': lambda n: PECFunctionCall(
-        'make_vector',
-        [n, PELispSymbol('nil')],
-    ),
-    'make_nil_vector': lambda n: PECFunctionCall(
-        'make_vector',
-        [n, PELispSymbol('nil')],
-    ),
-    'ASET': lambda vec, index, value: PELispForm('aset', [vec, index, value]),
-    'AREF': lambda vec, index: PELispForm('aref', [vec, index]),
-
-    # Char-tables
-    'CHAR_TABLE_SET': lambda table, index, value: PECFunctionCall(
-        'char_table_set', [table, index, value],
-    ),
-}
 
 
 class PartialEvaluator(dict):
@@ -168,9 +98,13 @@ class PartialEvaluator(dict):
             self,
             all_symbols: list[LispSymbol],
             files: list[FileContents],
+            pe_c_functions: set[str],
+            pe_util_functions: dict[str, Callable],
     ):
         self._current = cast(FileContents, None)
         self.files = files
+        self.pe_c_functions = pe_c_functions
+        self.pe_util_functions = pe_util_functions
         self.constants = {}
         self.lisp_variables = {}
         self.lisp_functions = {}
@@ -263,10 +197,10 @@ class PartialEvaluator(dict):
         if key == 'void':
             # The tranpiler converts `(void) 0;` to `void(0)` as a no-op.
             return lambda _: None
-        if key in PE_UTIL_FUNCTIONS:
-            rewrite = PE_UTIL_FUNCTIONS[key]
+        if key in self.pe_util_functions:
+            rewrite = self.pe_util_functions[key]
             return self._watch_side_effects(rewrite)
-        if key in PE_C_FUNCTIONS:
+        if key in self.pe_c_functions:
             return self._watch_side_effects(lambda *args: PECFunctionCall(key, list(args)))
         if key in self.lisp_variables:
             v = self.lisp_variables[key]

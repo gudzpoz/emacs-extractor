@@ -316,8 +316,10 @@ class PESerializer:
         return f'{function}({self._java_arg_list(args)})'
 
     def _java_function_call(self, function: str, args: list[PECValue]) -> str:
+        # Need to implement the functions in PE_C_FUNCTIONS as well as
+        # PECFunctionCall in extraction_config.py.
         match function:
-            case 'make_fixnum':
+            case 'make_fixnum' | 'make_int':
                 assert len(args) == 1
                 return f'(long) ({self._expr_to_java(args[0])})'
             case 'make_float':
@@ -335,6 +337,11 @@ class PESerializer:
             case 'make_symbol_special':
                 assert len(args) == 2 and isinstance(args[1], bool)
                 return f'{self._expr_to_java(args[0])}.setSpecial({self._expr_to_java(args[1])})'
+            # case 'make_hash_table':
+            # case 'set_char_table_purpose':
+            # case 'set_char_table_defalt':
+            # case 'char_table_set_range':
+            # case 'decode_env_path':
             case 'init_buffer_local_defaults':
                 return f'initBufferLocalDefaults(/* TODO */)'
             case 'define_charset_internal':

@@ -7,3 +7,65 @@ including:
 - Various varaibles, including those define by =DEFVAR_*= or C global =Lisp_Object= variables.
 - Symbols defined by =DEFSYM=.
 - Subroutines defined by =DEFUN= or =defun=, exported by =defsubr=.
+
+* Usage
+
+Please first build Emacs to have things like =globals.h= generated.
+
+#+begin_src shell
+$ pip3 install --use-pep517 .
+$ emacs-extractor -h
+usage: emacs-extractor [-h] -c CONFIG [-f FINALIZER] [-o OUTPUT] src_dir
+
+Emacs extractor
+
+positional arguments:
+  src_dir               Emacs source directory
+
+options:
+  -h, --help            show this help message and exit
+  -c CONFIG, --config CONFIG
+                        Config file
+  -f FINALIZER, --finalizer FINALIZER
+                        Finalizer script
+  -o OUTPUT, --output OUTPUT
+                        Output JSON file
+
+$ EMACS_SRC=emacs/src/
+$ emacs-extractor "$EMACS_SRC" -c extraction_config.py -o extraction.json
+#+end_src
+
+** Config file
+
+The scripts are full of hacks and may require quite a bit of regexp engineering.
+Basically, all configurations for extracting structural information lies in a
+Python file, supplied via the =-c/--config= command-line parameter. Please refer
+to the docstrings for more information.
+
+See [[file:extraction_config.py]] for an example. (Tested against Emacs 30 branch.)
+
+** The extraction process
+
+The scripts run =gcc -E= to preprocess files to rid things like =#if 0= and then
+use tree-sitter to parse the files. The following will be extracted:
+
+1. Symbol definitions from =globals.h=.
+2. The order of =init_*= or =syms_of_*= function calls in the =main= function in
+   =emacs.c=.
+3. Constants defined with =#define= or =enum=, =DEFVAR_*= variables, global
+   =Lisp_Object= variables and =DEFUN= subroutines.
+4. The function body of each =init_*/syms_of_*= functions.
+
+Then, the C AST of the init functions will be transformed into Python code and
+interpreted to extract initialization info. Simple init values like =nil= and
+fix nums will be extracted into the =init_value= field of the corresponding
+=LispVariable= instance; complex statements will be transformed into something
+like =PELispVarialeAssignment('face-default-stipple',
+PECFunctionCall('make_string', ['gray3', 5]))=.
+
+** Finalizer file
+
+Instead of consuming the produced JSON file, one can also use the
+=-f/--finalizer= argument to supply a Python file to consume the Python objects
+(which comes with some type hints). An (incomplete) example is at
+[[file:extraction_java.py]].

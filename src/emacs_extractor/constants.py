@@ -61,30 +61,9 @@ _ENUM_CONSTANT_QUERY = Query(C_LANG, r'''
  (enumerator_list) @list
 )
 ''')
-_IGNORED_ENUMS = {
-    # lisp.h
-    'Lisp_Type',
-    'NIL_IS_ZERO',
-    'SUB_CHAR_TABLE_OFFSET',
-    'USE_STACK_CONS',
-    'USE_STACK_STRING',
-    # alloc.c
-    'roundup_size',
-    # buffer.h
-    'BUFFER_LISP_SIZE',
-    'BUFFER_REST_SIZE',
-    # composite.c
-    'GLYPH_LEN_MAX',
-    # editfns.c
-    'USEFUL_PRECISION_MAX',
-    # lread.c
-    'word_size_log2',
-    # timefns.c
-    'flt_radix_power_size',
-}
 
 
-def extract_enum_constants(root: Node, global_constants: dict[str, typing.Any]):
+def extract_enum_constants(root: Node, global_constants: dict[str, typing.Any], extra_ignored: set[str]):
     """
     Extracts enum constants from the given root node.
     """
@@ -97,7 +76,7 @@ def extract_enum_constants(root: Node, global_constants: dict[str, typing.Any]):
         group = None
         if 'group' in match and len(match['group']) != 0:
             group = require_text(match['group'])
-            if group in _IGNORED_ENUMS:
+            if group in extra_ignored:
                 continue
         for enumerator in require_single(enum_list).named_children:
             if enumerator.type != 'enumerator':
@@ -105,7 +84,7 @@ def extract_enum_constants(root: Node, global_constants: dict[str, typing.Any]):
             name_node = enumerator.child_by_field_name('name')
             assert name_node is not None, enum_list[0].text
             name = require_not_none(name_node.text).decode()
-            if name in _IGNORED_ENUMS:
+            if name in extra_ignored:
                 continue
             value_node = enumerator.child_by_field_name('value')
             try:

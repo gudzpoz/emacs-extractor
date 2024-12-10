@@ -77,8 +77,20 @@ class EmacsExtractorConfig:
     To handle `enum { A = B + 1 };` in C code, we actually `eval` values like `B + 1`.
     So this field serves to provide concrete values for things like `NULL` in the eval context.'''
 
+    ignored_constants: set[str]
+    '''Constants to be ignored when extracting constants.
+
+    Currently, these mostly include constants requiring `sizeof` or `offsetof`.'''
+
     ignored_functions: set[str]
     '''Functions to be ignored when partial-evaluating the code.'''
+
+    pe_c_functions: set[str]
+    '''Functions to be treated as C functions when partial-evaluating the code.'''
+
+    pe_util_functions: dict[str, typing.Callable]
+    '''Extra global functions to be placed in the evaluation context.
+    Mainly used to transform some utility functions into common functions.'''
 
     function_specific_configs: dict[str, SpecificConfig]
     '''Configuration for specific init functions.'''
