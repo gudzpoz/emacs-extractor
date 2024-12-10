@@ -9,37 +9,47 @@ from emacs_extractor.variables import CVariable, LispSymbol, LispVariable
 
 @dataclass
 class PELispVariable:
+    '''Referring to the value of a lisp variable defined with `DEFVAR_*`.'''
     lisp_name: str
 
 @dataclass
 class PECVariable:
+    '''Referring to the value of a C variable.'''
     c_name: str
     local: bool
+    '''True if the variable is a function-local variable.'''
 
 @dataclass
 class PELispSymbol:
+    '''Referring to a lisp symbol (e.g., Qnil).'''
     lisp_name: str
 
 @dataclass
 class PELispForm:
+    '''Calls a built-in subroutine. For some vararg subroutines,
+    the arguments may be like [arg_count, arg_array], or maybe not.'''
     function: str
     arguments: list['PEValue']
 
 @dataclass
 class PECFunctionCall:
+    '''Calls a C function.'''
     c_name: str
     arguments: list['PECValue']
 
 @dataclass
 class PELispVariableAssignment:
+    '''Assigning a value to a lisp variable defined with `DEFVAR_*`.'''
     lisp_name: str
     value: 'PEValue'
 
 @dataclass
 class PECVariableAssignment:
+    '''Assigning a value to a C variable.'''
     c_name: str
     value: 'PECValue'
     local: bool
+    '''True if the variable is a function-local variable.'''
 
 PEValue = Union[
     PELispVariable,
@@ -50,7 +60,16 @@ PEValue = Union[
     PELispVariableAssignment,
     PECVariableAssignment,
 ]
-PECValue = Union[PEValue | int | str | float | bool]
+
+@dataclass
+class PELiteral:
+    '''A utility class representing values preserved as is.
+
+    Not used by the evaluator. Only provided for the convenience of extraction configs
+    and finalizers.'''
+    value: str
+
+PECValue = Union[PEValue | PELiteral | int | str | float | bool]
 
 
 class PartialEvaluator(dict):
@@ -150,6 +169,7 @@ class PartialEvaluator(dict):
         i = self._potential_side_effects.pop(id(v), None)
         if i is not None:
             self._evaluated[i] = None
+        return v
 
     def _walk_remove_side_effect(self, v: Any):
         if not is_dataclass(v) or isinstance(v, type):
@@ -192,11 +212,17 @@ class PartialEvaluator(dict):
             return PECVariable(key, False)
         if key in self.lisp_functions:
             return self._watch_side_effects(
-                lambda *args: PELispForm(self.lisp_functions[key].lisp_name, list(args)),
+                lambda *args: PELispForm(self.lisp_functions[key].lisp_name, (
+                    ([] if args[1] == 0 else list(args[1]))
+                    if len(args) == 2 and isinstance(args[0], int)
+                    else list(args)
+                )),
             )
         if key == 'void':
             # The tranpiler converts `(void) 0;` to `void(0)` as a no-op.
             return lambda _: None
+        if key == 'PRUNE_SIDE_EFFECT':
+            return lambda v: self._remove_side_effects(v)
         if key in self.pe_util_functions:
             rewrite = self.pe_util_functions[key]
             return self._watch_side_effects(rewrite)

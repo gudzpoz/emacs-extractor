@@ -11,7 +11,7 @@ from emacs_extractor.config import (
 )
 from emacs_extractor.partial_eval import (
     PECFunctionCall, PECVariable, PELispForm, PELispSymbol, PELispVariable,
-    PELispVariableAssignment, PEValue, PartialEvaluator,
+    PELispVariableAssignment, PEValue, PELiteral, PartialEvaluator,
 )
 
 
@@ -19,14 +19,22 @@ from emacs_extractor.partial_eval import (
 ### Constants ###
 #################
 
+# Actually, the following "constants" need not be real constants,
+# it can be any object as long as the partial-evaluation passes.
+# For example, one can use a special object that their finalizer
+# recognizes to refer to any variable in their runtime.
+# See PATH_SEPARATOR_CHAR for an example.
+
 # emacs.c
 SYSTEM_TYPE = 'gnu/linux' # the `system-type` variable
 SYSTEM_CONFIGURATION = 'x86_64-pc-linux-gnu' # the `system-configuration` variable
 PATH_DUMPLOADSEARCH = '' # segment of `source-directory`, supplied to decode_env_path
 SYSTEM_CONFIG_OPTIONS = '' # the `system-configuration-options` variable
 SYSTEM_CONFIG_FEATURES = '' # the `system-configuration-features` variable
-PATH_SEPARATOR_CHAR = ':' # the `path-separator` variable
 EMACS_COPYRIGHT = 'Copyright (C) 2024 Free Software Foundation, Inc.' # `emacs-copyright`
+# The `path-separator` variable, I use PELiteral here to hint my finalizer
+# to output `File.pathSeparator` as is. Please change it to your language's equivalent.
+PATH_SEPARATOR_CHAR = PELiteral('File.pathSeparator')
 
 def extract_emacs_version():
     configure_ac = get_emacs_dir().parent.joinpath('configure.ac')
@@ -132,8 +140,6 @@ PE_C_FUNCTIONS = {
 
     'make_symbol_constant', # (Lisp_Object)
     'make_symbol_special', # (Lisp_Object)
-
-    'make_hash_table', # (hash_table_test, int size, weakness, bool purecopy)
 
     'set_char_table_purpose', # (Lisp_Object, Lisp_Object)
     'set_char_table_defalt', # (Lisp_Object, Lisp_Object)
@@ -487,6 +493,10 @@ file_specific_configs = {
     'syms_of_xfaces': SpecificConfig(
         extra_globals={
             'hashtest_eq': PECVariable('hashtest_eq', False),
+            'make_hash_table': lambda *args: PELispForm('make-hash-table', [
+                PELispSymbol(':test'),
+                PELispSymbol('eq'),
+            ]),
         },
     ),
 }

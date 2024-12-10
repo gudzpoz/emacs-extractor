@@ -141,9 +141,13 @@ class CTranspiler:
                     left = self._transpile_expression(
                         require_not_none(node.child_by_field_name('left')),
                     )
-                    statement = f'{left}={self._transpile_expression(
+                    right = self._transpile_expression(
                         require_not_none(node.child_by_field_name('right')),
-                    )}'
+                    )
+                    if '[' in left and ']' in left:
+                        # list/dict assignment
+                        right = f'PRUNE_SIDE_EFFECT({right})'
+                    statement = f'{left}={right}'
                     replaced = self._try_replace(statement)
                     self._indentations.pop()
                     self._result_stack[-1].append(replaced)

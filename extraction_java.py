@@ -197,6 +197,20 @@ def _c_var_name_to_java(c_name: str):
     return _c_name_to_java(c_name[1:] if c_name.startswith('V') else c_name)
 
 
+VAR_ARG_FUNCTIONS = {
+    'make-hash-table',
+    'nconc',
+}
+ALLOWED_GLOBAL_C_VARS = {
+    'cached_system_name': None,
+    'empty_unibyte_string': 'ELispString',
+    'gstring_work_headers': None,
+    'regular_top_level_message': None,
+    'Vcoding_category_table': None,
+    'Vprin1_to_string_buffer': 'ELispBuffer',
+}
+
+
 def export_variables(extraction: EmacsExtraction, symbols: dict[str, str], output_file: str):
     files = []
     variables: dict[str, str] = {}
@@ -232,11 +246,9 @@ def export_variables(extraction: EmacsExtraction, symbols: dict[str, str], outpu
         variables[stem] = f'''{'\n'.join(var_defs)}
     private static void {stem}Vars() {{
 {'\n'.join(inits)}
-    }}
-'''
+    }}'''
     all_inits = sorted(variables.items(), key=lambda kv: kv[0])
-    inits = f'''
-    public static void initGlobalVariables() {{
+    inits = f'''    public static void initGlobalVariables() {{
 {'\n'.join(f'        {stem}Vars();' for stem, _ in all_inits)}
     }}
 {'\n'.join(init for _, init in all_inits)}
@@ -289,19 +301,35 @@ class PESerializer:
         java_name = _c_name_to_java(self.symbol_mapping[name])
         return f'{java_name}.getValue()'
 
-    def _java_arg_list(self, args: list[PECValue] | list[PEValue]) -> str:
+    def _java_arg_list(self, args: list[PECValue] | list[PEValue], joiner: str = ', ') -> str:
         arg_list = []
         for arg in args:
             v = self._expr_to_java(arg)
             assert isinstance(v, str)
             arg_list.append(v)
-        return ', '.join(arg_list)
+        indent = len(arg_list) > 6 and joiner == ', '
+        if indent:
+            joiner = f',\n{' ' * 12}'
+        return joiner.join(arg_list) + (indent and '\n        ' or '')
 
     def _java_lisp_call(self, function: str, args: list[PEValue]) -> str:
-        if function == 'define-coding-system-internal':
-            # CALLMANY
-            return f'defineCodingSystemInternal(/* TODO */)'
+        # Things should still work without the following match-case, but
+        # it serves to simplify the code and make it more OOP.
         match function:
+            case 'set':
+                assert len(args) == 2
+                symbol = self._expr_to_java(args[0])
+                assert isinstance(symbol, str)
+                if '.' in symbol:
+                    # Complex operation
+                    symbol = f'asSym({symbol})'
+                return f'{symbol}.setValue({self._expr_to_java(args[1])})'
+            case 'aref':
+                assert len(args) == 2
+                return f'{self._expr_to_java(args[0])}.get({self._expr_to_java(args[1])})'
+            case 'aset':
+                assert len(args) == 3
+                return f'{self._expr_to_java(args[0])}.set({self._expr_to_java(args[1])}, {self._expr_to_java(args[2])})'
             case 'list':
                 return f'ELispCons.listOf({self._java_arg_list(args)})'
             case 'purecopy':
@@ -309,11 +337,28 @@ class PESerializer:
                 result = self._expr_to_java(args[0])
                 assert isinstance(result, str)
                 return result
+            case 'make-variable-buffer-local':
+                assert len(args) == 1
+                return f'{self._expr_to_java(args[0])}.setBufferLocal(true)'
+            case 'internal-make-var-non-special':
+                assert len(args) == 1
+                return f'{self._expr_to_java(args[0])}.setSpecial(false)'
+            case 'unintern':
+                assert len(args) == 2
+                assert self._expr_to_java(args[1]) == 'NIL'
+                return f'unintern({self._expr_to_java(args[0])})'
+            case 'define-coding-system-internal':
+                return f'defineCodingSystemInternal(new Object[]{{{self._java_arg_list(
+                    [arg or False for arg in args], ',\n            '
+                )}\n        }})'
         assert function in self.lisp_functions
         f = self.lisp_functions[function]
         assert f.c_name.startswith('F')
-        function = f'F{_c_name_to_java_class(f.c_name[1:])}.{_c_name_to_java(f.c_name[1:])}'
-        return f'{function}({self._java_arg_list(args)})'
+        if function in VAR_ARG_FUNCTIONS:
+            arg_list = f'new Object[]{{{self._java_arg_list(args)}}}'
+        else:
+            arg_list = self._java_arg_list(args)
+        return f'F{_c_name_to_java_class(f.c_name[1:])}.{_c_name_to_java(f.c_name[1:])}({arg_list})'
 
     def _java_function_call(self, function: str, args: list[PECValue]) -> str:
         # Need to implement the functions in PE_C_FUNCTIONS as well as
@@ -337,15 +382,37 @@ class PESerializer:
             case 'make_symbol_special':
                 assert len(args) == 2 and isinstance(args[1], bool)
                 return f'{self._expr_to_java(args[0])}.setSpecial({self._expr_to_java(args[1])})'
-            # case 'make_hash_table':
-            # case 'set_char_table_purpose':
-            # case 'set_char_table_defalt':
-            # case 'char_table_set_range':
-            # case 'decode_env_path':
+            case 'set_char_table_purpose':
+                assert len(args) == 2
+                return f'{self._expr_to_java(args[0])}.setPurpose({self._expr_to_java(args[1])})'
+            case 'set_char_table_defalt':
+                assert len(args) == 2
+                return f'{self._expr_to_java(args[0])}.setDefault({self._expr_to_java(args[1])})'
+            case 'char_table_set':
+                assert len(args) == 3
+                return f'{self._expr_to_java(args[0])}.set({
+                    self._expr_to_java(args[1])
+                }, {self._expr_to_java(args[2])})'
+            case 'char_table_set_range':
+                assert len(args) == 4
+                return f'{self._expr_to_java(args[0])}.setRange({
+                    self._expr_to_java(args[1])
+                }, {self._expr_to_java(args[2])}, {
+                    self._expr_to_java(args[3])
+                })'
+            case 'decode_env_path':
+                assert len(args) == 3
+                assert isinstance(args[2], int)
+                if args[0] == 0:
+                    args[0] = PELiteral('null')
+                args[2] = args[2] != 0
+                return f'decodeEnvPath({self._java_arg_list(args)})'
             case 'init_buffer_local_defaults':
                 return f'initBufferLocalDefaults(/* TODO */)'
             case 'define_charset_internal':
                 return f'defineCharsetInternal({self._java_arg_list(args)})'
+            case 'setup_coding_system':
+                return f'setupCodingSystem({self._java_arg_list(args)})'
             case _:
                 try:
                     return f'{function}({self._java_arg_list(args)}) /* TODO */'
@@ -383,37 +450,44 @@ class PESerializer:
             case PECFunctionCall(function, args):
                 return self._java_function_call(function, args)
             case PELispVariableAssignment(name, value):
+                if name not in self.lisp_variables:
+                    return f'{self.symbol_mapping[name]}.setValue({self._expr_to_java(value)})'
                 local_var = self._local_vars.get(name)
-                init = None
+                java_name = _c_name_to_java(self.symbol_mapping[name])
                 if local_var is None:
-                    if name not in self.lisp_variables:
-                        return f'{self.symbol_mapping[name]}.setValue({self._expr_to_java(value)})'
-                    java_name = _c_name_to_java(self.symbol_mapping[name])
                     local_var = f'{java_name}JInit'
-                    self._local_vars[name] = local_var
-                    init = f'{java_name}.setValue({local_var})'
+                else:
+                    _, tail = local_var.split('JInit')
+                    if tail == '':
+                        tail = '1'
+                    else:
+                        tail = str(int(tail) + 1)
+                    local_var = f'{java_name}JInit{tail}'
                 value = self._boolean(value)
                 assign = f'{local_var} = {self._expr_to_java(value)}'
+                init = f'{java_name}.setValue({local_var})'
+                self._local_vars[name] = local_var
                 return assign if init is None else [
                     f'var {assign}',
                     init,
                 ]
             case PECVariableAssignment(name, value, local):
-                if not local:
-                    # TODO
+                if not local and name not in ALLOWED_GLOBAL_C_VARS:
                     return None
                 if value is None:
                     return None
                 local_var = self._local_vars.get(name)
                 prefix = ''
                 if local_var is None:
-                    prefix = 'var '
+                    if local or (ALLOWED_GLOBAL_C_VARS[name] is None):
+                        prefix = 'var '
                     local_var = _c_var_name_to_java(name)
                     self._local_vars[name] = local_var
                 value = self._boolean(value)
                 return f'{prefix}{local_var} = {self._expr_to_java(value)}'
+            case PELiteral(value):
+                return value
             case builtins.list:
-                pe_value
                 pass
             case _:
                 raise Exception(f'Unknown expression type: {pe_value}')
@@ -433,10 +507,34 @@ class PESerializer:
 
 def export_initializations(extraction: EmacsExtraction, symbols: dict[str, str], output_file: str):
     serializer = PESerializer(extraction, symbols)
+    initializations = []
+    calls = []
     for init in extraction.initializations:
         function = init.name
-        print(f'/*** {function} ***/')
-        print('\n'.join(serializer.serialize(init)))
+        serialized = serializer.serialize(init)
+        if len(serialized) == 0:
+            continue
+
+        java_function = _c_name_to_java(function)
+        calls.append(f'        {java_function}();')
+        initializations.append(f'''
+    private static void {java_function}() {{
+        {'\n        '.join(serialized)}
+    }}''')
+    region = f'''    public static void postInitVariables() {{
+{'\n'.join(calls)}
+    }}
+{''.join(initializations)}
+'''
+    with open(output_file, 'r') as f:
+        contents = f.read()
+    with open(output_file, 'w') as f:
+        contents = replace_or_insert_region(
+            contents,
+            'initializations',
+            region,
+        )
+        f.write(contents)
 
 
 def finalize(extraction: EmacsExtraction):
