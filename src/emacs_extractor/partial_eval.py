@@ -248,7 +248,15 @@ class PartialEvaluator(dict):
                 v = True
             elif v.lisp_name == 'nil':
                 v = False
-        if isinstance(v, (int, float, bool)):
+        if isinstance(v, PECFunctionCall):
+            match v.c_name:
+                case 'make_fixnum' if isinstance(v.arguments[0], int):
+                    v = v.arguments[0]
+                case 'make_float' if isinstance(v.arguments[0], float):
+                    v = v.arguments[0]
+                case 'make_string' if isinstance(v.arguments[0], str):
+                    v = v.arguments[0]
+        if isinstance(v, (int, float, bool, str)):
             return v, True
         return v, False
 

@@ -13,11 +13,21 @@ class Subroutine:
     c_name: str
     symbol_c_name: str
     min_args: int
+    '''The minimum number of arguments.'''
     max_args: int
+    '''The maximum number of arguments (or -1 if UNEVALLED, -2 if MANY).'''
     int_spec: str
+    '''(interactive) clause'''
     doc: str
+    '''The docstring used in the DEFUN macro.'''
     args: list[str]
+    '''The argument names.
+
+    The names are extracted from the `usage: (...)` string in the docstring or
+    from the arguments of the C function. This is done in a best-effort manner
+    and may not always be correct.'''
     exported: bool = False
+    '''`True` if this subroutine is exported with `defsubr`.'''
 
 
 _DEFUN_QUERY = Query(C_LANG, r'''
@@ -42,7 +52,7 @@ _DEFUN_QUERY = Query(C_LANG, r'''
 ''')
 
 
-_USAGE_PATTERN = re.compile(r'^usage: \(([ &.[\]0-9a-zA-Z_-]+)\)$', re.MULTILINE)
+_USAGE_PATTERN = re.compile(r'^usage: \(([^ ]+\s*[ &.[\]0-9a-zA-Z_-]+)\)$', re.MULTILINE)
 _PARSED_DECLARATION_QUERY = Query(C_LANG, r'''
 (declaration
  (function_declarator .
@@ -53,16 +63,17 @@ _PARSED_DECLARATION_QUERY = Query(C_LANG, r'''
 ''')
 
 
-def extract_signature(args_node: Node, doc: str):
-    usage_match = _USAGE_PATTERN.match(doc)
+def extract_signature(args_node: Node, doc: str, expected: int):
+    usage_match = _USAGE_PATTERN.search(doc)
     if usage_match is not None:
         usage = usage_match.group(1)
         usage_args: list[str] = [
-            arg.strip('[]')
+            arg.strip('[]').lower().replace('-', '_')
             for arg in usage.replace('...', ' ').strip().split(' ')[1:]
             if arg != '&optional' and arg != '&rest'
         ]
-        return usage_args
+        if len(usage_args) >= expected:
+            return usage_args
 
     declaration = f'void f {require_text(args_node)};'
     parsed = parse_c(declaration.encode())
@@ -118,7 +129,7 @@ def extract_subroutines(root: Node, global_variables: dict[str, typing.Any]):
         doc = require_text(match['doc'])
         doc = trim_doc(doc)
         args_node = require_single(match['args'])
-        args = extract_signature(args_node, doc)
+        args = extract_signature(args_node, doc, max_args if max_args >= 0 else min_args)
         subr = Subroutine(lisp_name, c_name, symbol_c_name, min_args, max_args, int_spec, doc, args)
         mapping[symbol_c_name] = subr
         subroutines.append(subr)

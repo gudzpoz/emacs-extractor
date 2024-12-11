@@ -3,9 +3,22 @@ import builtins
 import json
 import re
 import textwrap
+
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
+from xml.sax.saxutils import escape as escape_xml
+
+from pyparsing import (
+    alphanums,
+    LineStart,
+    Literal,
+    QuotedString,
+    SkipTo,
+    Word,
+)
+
 from emacs_extractor.config import (
-    EmacsExtraction, InitFunction,
+    EmacsExtraction, InitFunction, FileContents,
     get_unknown_cmd_flags, set_finalizer,
 )
 from emacs_extractor.partial_eval import *
@@ -79,6 +92,7 @@ def generate_java_symbol_init(symbols: list[tuple[str, str]], init_function: str
 
 
 def export_symbols(extraction: EmacsExtraction, output_file: str):
+    '''Generates initialization code for lisp symbols.'''
     with open(output_file, 'r') as f:
         contents = f.read()
 
@@ -217,6 +231,7 @@ ALLOWED_GLOBAL_C_VARS = {
 
 
 def export_variables(extraction: EmacsExtraction, symbols: dict[str, str], output_file: str):
+    '''Generates definitions of forwarded lisp variables.'''
     files = []
     variables: dict[str, str] = {}
     for file in sorted(extraction.file_extractions, key=lambda f: f.file.name):
@@ -248,7 +263,11 @@ def export_variables(extraction: EmacsExtraction, symbols: dict[str, str], outpu
                         case bool(sym):
                             init = f'{'true' if sym else 'false'}'
                         case int(i):
-                            init = f'{i}'
+                            init = f'{i}L'
+                        case float(f):
+                            init = f'{f}'
+                        case str(s):
+                            init = f'new ELispString({json.dumps(s)})'
                         case _:
                             assert var.init_value is None, var.init_value
                 case 'KBOARD':
@@ -562,7 +581,9 @@ class PESerializer:
 
 
 MANUALLY_IMPLEMENTED = {
+    'init_casetab_once',
     'init_charset',
+    'init_syntax_once',
 }
 
 
@@ -572,6 +593,7 @@ def export_initializations(
         output_file: str,
         buffer_output_file: str,
 ):
+    '''Generates initialization code for PE AST and buffer-local definitions.'''
     serializer = PESerializer(extraction, symbols)
     initializations = []
     calls = []
@@ -693,16 +715,183 @@ def export_initializations(
         f.write(contents)
 
 
+JAVA_NODE_DETECT = re.compile(
+    r'public abstract static class (\w+) extends ELispBuiltInBaseNode',
+    re.MULTILINE | re.DOTALL,
+)
+JAVA_NODE_MATCH = (
+    LineStart()
+    + Literal('@ELispBuiltIn(name =')
+    + QuotedString('"')('name')
+    + SkipTo(')')('attrs') + ')'
+    + Literal('@GenerateNodeFactory')
+    + Literal('public abstract static class')
+    + Word('F', alphanums)('fname')
+    + SkipTo('{')('extends') + '{'
+    + SkipTo('\n    }\n')('body')
+)
+
+
+NON_VAR_ARG_SPECIAL_FORMS = {
+    'defconst': 3,
+    'defvar': 3,
+    'function': 1,
+    'quote': 1,
+}
+
+
+def generate_subroutine_attrs(subroutine: Subroutine):
+    upper = max(0, subroutine.min_args) if subroutine.max_args < 0 else subroutine.max_args
+    is_varargs = False
+    match subroutine.max_args:
+        case -2: # MANY
+            is_varargs = True
+            varargs = ', varArgs = true'
+            if subroutine.min_args > 10:
+                subroutine.min_args = 0
+            upper = max(0, subroutine.min_args)
+        case -1 if subroutine.lisp_name not in NON_VAR_ARG_SPECIAL_FORMS: # UNEVALLED
+            is_varargs = True
+            varargs = ', varArgs = true'
+            varargs = ', varArgs = true'
+            upper = max(0, subroutine.min_args)
+        case -1:
+            upper = NON_VAR_ARG_SPECIAL_FORMS[subroutine.lisp_name]
+            varargs = ', varArgs = false'
+        case _:
+            varargs = ''
+            upper = subroutine.max_args
+    assert upper >= 0 and subroutine.min_args >= 0
+    return f''', minArgs = {subroutine.min_args}, maxArgs = {upper}{varargs}{
+        ', rawArg = true' if subroutine.max_args == -1 else ''
+    }''', (upper, is_varargs)
+
+
+EXISTING_SPECIALIZATION_PATTERN = (
+    LineStart()
+    + (
+        Literal('@Specialization\n') |
+        (Literal('@Specialization(') + SkipTo('\n'))
+    )
+    + SkipTo('{')('line')
+)
+THIS_USAGE = re.compile(r'\bthis\b')
+
+
+def export_subroutines_in_file(extraction: FileContents, output: Path):
+    with open(output, 'r') as f:
+        contents = f.read()
+    existing = dict(
+        (m['fname'], m)
+        for m in JAVA_NODE_MATCH.search_string(contents)
+    )
+
+    start = contents.find('\n    @ELispBuiltIn(name =')
+    if start == -1:
+        original = contents[0:contents.rindex('}')]
+    else:
+        original = contents[0:start]
+        comment_end = original.rfind('*/')
+        if original[comment_end:].strip() == '*/':
+            trailing_comment_start = original.rfind('\n    /**\n')
+            assert trailing_comment_start != -1
+            original = original[0:trailing_comment_start]
+    for subroutine in extraction.functions:
+        assert subroutine.c_name.startswith('F')
+        fname = f'F{_c_name_to_java_class(subroutine.c_name[1:])}'
+        attrs, (max_args, is_varargs) = generate_subroutine_attrs(subroutine)
+        if is_varargs:
+            if len(subroutine.args) == max_args:
+                subroutine.args.append('args')
+            assert max_args + int(is_varargs) <= len(subroutine.args), subroutine
+            if max_args + int(is_varargs) < len(subroutine.args):
+                subroutine.args = subroutine.args[:max_args + int(is_varargs)]
+                subroutine.args[-1] = 'args'
+        else:
+            assert max_args == len(subroutine.args), (max_args, subroutine)
+        subroutine.args = [_c_name_to_java(arg) for arg in subroutine.args]
+        javadoc = f'''/**
+     * <pre>
+{textwrap.indent(escape_xml(subroutine.doc), '     * ')}
+     * </pre>
+     */'''
+        if fname in existing:
+            info = existing[fname]
+            assert info['name'] == subroutine.lisp_name
+            assert info['attrs'] == attrs, (subroutine, info['attrs'], attrs)
+            extends = info['extends']
+            body = info['body']
+            assert (
+                extends == 'extends ELispBuiltInBaseNode '
+                or extends == 'extends ELispBuiltInBaseNode '
+                'implements ELispBuiltInBaseNode.InlineFactory '
+            )
+            assert '@Specialization' in body
+            impls = EXISTING_SPECIALIZATION_PATTERN.search_string(body)
+            assert len(impls) >= 1, body
+            for impl in impls:
+                line = str(impl['line']).strip()
+                if not line.startswith('public static'):
+                    assert THIS_USAGE.search(body) is not None, line
+                    assert line.startswith('public '), line
+                line = line[line.index('(') + 1:line.rindex(')')]
+                if '@Cached' in line:
+                    line = line.split('@Cached')[0]
+                if 'VirtualFrame frame' in line:
+                    line = line.replace('VirtualFrame frame', '')
+                assert '@' not in line, line
+                actual_args = [arg.strip().split()[-1] for arg in line.split(',') if arg.strip() != '']
+                assert actual_args == subroutine.args, (actual_args, subroutine)
+        else:
+            extends = 'extends ELispBuiltInBaseNode '
+            args = []
+            for i, arg in enumerate(subroutine.args):
+                if is_varargs and i == len(subroutine.args) - 1:
+                    args.append(f'Object[] {arg}')
+                else:
+                    args.append(f'Object {arg}')
+            body = f'''@Specialization
+        public static Void {fname}({', '.join(args)}) {{
+            throw new UnsupportedOperationException();
+        }}'''
+        original += f'''
+    {javadoc}
+    @ELispBuiltIn(name = "{subroutine.lisp_name}"{attrs})
+    @GenerateNodeFactory
+    public abstract static class {fname} {extends}{{
+        {body}
+    }}
+'''
+    original += '}\n'
+
+
+def export_subroutines(extraction: EmacsExtraction, output_dir: str):
+    '''Generates boilerplate for definitions of Emacs built-in subroutines.'''
+    outputs = {
+        output.stem[len('BuiltIn'):].lower(): output
+        for output in Path(output_dir).glob('*.java')
+        if output.stem.startswith('BuiltIn')
+    }
+    for file in extraction.file_extractions:
+        if file.file.name.endswith('.h'):
+            continue
+        assert file.file.stem.lower() in outputs, file.file.stem
+        output = outputs[file.file.stem.lower()]
+        export_subroutines_in_file(file, output)
+
+
 def finalize(extraction: EmacsExtraction):
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--symbols', required=True, help='Symbol output java file')
     parser.add_argument('-g', '--globals', required=True, help='Variable output java file')
     parser.add_argument('-b', '--buffer', required=True, help='Buffer init output java file')
+    parser.add_argument('-d', '--builtin-dir', required=True, help='Directory for java classes of subroutines')
     args = parser.parse_args(get_unknown_cmd_flags())
 
     symbol_mapping = export_symbols(extraction, args.symbols)
     export_variables(extraction, symbol_mapping, args.globals)
     export_initializations(extraction, symbol_mapping, args.globals, args.buffer)
+    export_subroutines(extraction, args.builtin_dir)
 
 
 set_finalizer(finalize)

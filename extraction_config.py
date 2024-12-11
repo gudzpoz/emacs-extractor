@@ -136,7 +136,6 @@ PE_C_FUNCTIONS = {
     'make_vector', # (ptrdiff_t, Lisp_Object)
     'make_float', # (double)
     'make_fixnum', # (long)
-    'make_int', # (long)
 
     'make_symbol_constant', # (Lisp_Object)
     'make_symbol_special', # (Lisp_Object)
@@ -605,12 +604,6 @@ set_config(
             'word_size': 8,
             'CHAR_TABLE_STANDARD_SLOTS': '4 + (1 << CHARTAB_SIZE_BITS_0)',
             'LOG2_FLT_RADIX': 2,
-            # MANY used in the DEFUN macro.
-            # Actually, the macro concatenates MANY into DEFUN_MANY
-            # instead of using MANY as a constant.
-            # But for convenience here, we use MANY as a constant.
-            # When the arg_max is MANY (-1), the function takes any number of arguments.
-            'MANY': -1,
             'NULL': 0,
         },
         ignored_constants={
