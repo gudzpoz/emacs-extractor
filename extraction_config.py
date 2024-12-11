@@ -11,7 +11,7 @@ from emacs_extractor.config import (
 )
 from emacs_extractor.partial_eval import (
     PECFunctionCall, PECVariable, PELispForm, PELispSymbol, PELispVariable,
-    PELispVariableAssignment, PEValue, PELiteral, PartialEvaluator,
+    PELispVariableAssignment, PEValue, PECValue, PELiteral, PartialEvaluator,
 )
 
 
@@ -208,9 +208,10 @@ PE_UTIL_FUNCTIONS = {
 
 @dataclass
 class BufferLocalProperty:
-    default: PEValue
+    name: str
+    default: PECValue | None
     local_flag: int
-    permanent_local_flag: int
+    permanent_local: bool
 class InitBufferOnceBuffer(dict):
     def __init__(self, buffer: str):
         super().__init__({ '__var__': buffer })
@@ -219,7 +220,7 @@ class InitBufferOnceBuffer(dict):
 class InitBufferOnceGlobals(dict):
     def __init__(self):
         super().__init__({
-            'buffer_permanent_local_flags': InitBufferOnceBuffer('buffer_permanent_local_flags'),
+            'buffer_permanent_local_flags': [None] * 160,
             'buffer_local_flags': InitBufferOnceBuffer('buffer_local_flags'),
             'buffer_defaults': InitBufferOnceBuffer('buffer_defaults'),
             'buffer_local_symbols': InitBufferOnceBuffer('buffer_local_symbols'),
@@ -248,9 +249,9 @@ def remap_init_buffer_once(_, pe: PartialEvaluator) -> list[PEValue]:
     local_flags = pe['buffer_local_flags']
     buffer_defaults = pe['buffer_defaults']
     buffer_local_symbols = pe['buffer_local_symbols']
+    struct_buffer_fields = pe['struct_buffer_fields']
     keys = set(
-        list(permanent_local_flags.keys())
-        + list(local_flags.keys())
+        list(local_flags.keys())
         + list(buffer_defaults.keys())
         + list(buffer_local_symbols.keys())
     )
@@ -265,15 +266,27 @@ def remap_init_buffer_once(_, pe: PartialEvaluator) -> list[PEValue]:
             assert isinstance(i, int)
             return i
         raise ValueError(f'Invalid buffer local flag: {v}')
+    set_permanent_local_flags = {}
     for key in keys:
         if key == '__var__':
             continue
         default_value = buffer_defaults.get(key, PELispSymbol('nil'))
         local_flag = remap_int(local_flags.get(key, 0))
-        permanent_local_flag = remap_int(permanent_local_flags.get(key, 0))
-        buffer_locals.append(BufferLocalProperty(default_value, local_flag, permanent_local_flag))
+        permanent_local = False
+        if local_flag > 0:
+            permanent_local_flag = permanent_local_flags[local_flag]
+            assert permanent_local_flag is None or permanent_local_flag == 1
+            permanent_local = permanent_local_flag == 1
+            if permanent_local:
+                set_permanent_local_flags[local_flag] = key
+        buffer_locals.append(BufferLocalProperty(key, default_value, local_flag, permanent_local))
+    assert all(
+        (flag == None) == (i not in set_permanent_local_flags)
+        for i, flag in enumerate(permanent_local_flags)
+    )
+    assert set(set_permanent_local_flags.values()) == {'truncate_lines', 'buffer_file_coding_system'}
     init_call = PECFunctionCall(
-        'init_buffer_local_defaults', [cast(Any, buffer_locals)],
+        'init_buffer_local_defaults', [cast(Any, buffer_locals), cast(Any, struct_buffer_fields)],
     )
     return [
         init_call,
@@ -290,6 +303,12 @@ file_specific_configs = {
             r'Swatch_gc_cons_threshold',
             r'Fadd_variable_watcher',
         ],
+    ),
+    # buffer.h
+    'buffer.h': SpecificConfig(
+        # This injects info about struct buffer into 'init_buffer_once'
+        # as a 'struct_buffer_fields' global var (list[tuple[field_name_str, comment | None]]).
+        extra_extraction=misc.extract_struct_buffer,
     ),
     # buffer.c
     'init_buffer_once': SpecificConfig(
@@ -527,7 +546,7 @@ set_config(
 #define DEFSYM(a, b) ;
 #define defsubr(a) ;
 #define eassert(a) ;
-#define XSETFASTINT(a, b) (a) = (b);
+#define XSETFASTINT(a, b) (a) = make_fixnum(b);
 #define AUTO_STRING(name, str) (name) = build_unibyte_string (str);
 #define IEEE_FLOATING_POINT 1
 
@@ -554,6 +573,7 @@ set_config(
 #define BVAR(a, b) (a)[#b]
 #endif
 #define BUFFER_PVEC_INIT(a) ;
+#define HAVE_TREE_SITTER 1
 
 // category.c
 #define MAKE_CATEGORY_SET (Fmake_bool_vector (make_fixnum (128), Qnil))

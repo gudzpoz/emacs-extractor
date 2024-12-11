@@ -1,7 +1,7 @@
 from tree_sitter import Node, Query
 from emacs_extractor.config import SpecificConfig
-from emacs_extractor.partial_eval import PECFunctionCall, PELispSymbol
-from emacs_extractor.utils import C_LANG, require_single, require_text
+from emacs_extractor.partial_eval import PELispSymbol
+from emacs_extractor.utils import C_LANG, require_single, require_text, trim_doc
 from emacs_extractor.variables import LispSymbol
 
 
@@ -43,7 +43,11 @@ def _extract_string_array(root: Node, var_name: str):
     return strings
 
 
-def extract_frame_parms(config: SpecificConfig, root: Node, symbol_mapping: dict[str, LispSymbol]):
+def extract_frame_parms(
+        configs: dict[str, SpecificConfig],
+        root: Node,
+        symbol_mapping: dict[str, LispSymbol]
+):
     _, match = require_single(FRAME_PARMS_QUERY.matches(root))
     symbols = []
     for item in require_single(match['values']).named_children:
@@ -56,6 +60,7 @@ def extract_frame_parms(config: SpecificConfig, root: Node, symbol_mapping: dict
             assert param_name == _extract_symbol_index(param_symbol, symbol_mapping).lisp_name
         param_symbol = PELispSymbol(param_name)
         symbols.append(param_symbol)
+    config = configs['syms_of_frame']
     if config.extra_globals is None:
         config.extra_globals = {}
     config.extra_globals['frame_parms'] = symbols
@@ -73,7 +78,12 @@ KEYBOARD_MODIFIER_NAMES_QUERY = Query(C_LANG, '''
 ''')
 
 
-def extract_keyboard_c(config: SpecificConfig, root: Node, symbol_mapping: dict[str, LispSymbol]):
+def extract_keyboard_c(
+        configs: dict[str, SpecificConfig],
+        root: Node,
+        symbol_mapping: dict[str, LispSymbol]
+):
+    config = configs['syms_of_keyboard']
     if config.extra_globals is None:
         config.extra_globals = {}
 
@@ -96,3 +106,40 @@ def extract_keyboard_c(config: SpecificConfig, root: Node, symbol_mapping: dict[
     config.extra_globals['modifier_names'] = _extract_string_array(root, 'modifier_names')
     config.extra_globals['lispy_wheel_names'] = _extract_string_array(root, 'lispy_wheel_names')
 
+
+STRUCT_BUFFER_QUERY = Query(C_LANG, '''
+(struct_specifier
+ (type_identifier) @name (#eq? @name "buffer")
+ (field_declaration_list) @fields
+)
+''')
+
+
+def extract_struct_buffer(
+        configs: dict[str, SpecificConfig],
+        root: Node,
+        symbol_mapping: dict[str, LispSymbol]
+):
+    _, match = require_single(STRUCT_BUFFER_QUERY.matches(root))
+    buffer_fields = []
+    last_comment, last_comment_line = None, -1
+    for field in require_single(match['fields']).named_children:
+        if field.type == 'comment':
+            last_comment = trim_doc(require_text(field))
+            last_comment_line = field.end_point.row
+            continue
+        assert field.type == 'field_declaration', field
+        if require_text(field.child_by_field_name('type')) != 'Lisp_Object':
+            continue
+        field_name = require_text(field.child_by_field_name('declarator'))
+        assert field_name.endswith('_')
+        field_name = field_name[:-1]
+        comment = last_comment if (
+            field.start_point.row == last_comment_line
+            or field.start_point.row == last_comment_line + 1
+        ) else None
+        buffer_fields.append((field_name, comment))
+    config = configs['init_buffer_once']
+    if config.extra_globals is None:
+        config.extra_globals = {}
+    config.extra_globals['struct_buffer_fields'] = buffer_fields

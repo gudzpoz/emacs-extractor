@@ -9,16 +9,9 @@ from emacs_extractor.config import (
     load_config_file, set_emacs_dir, set_unknown_cmd_flags,
     load_finalizer_file,
 )
+from emacs_extractor.utils import dataclass_deep_to_json
 
 
-def default(o):
-    if isinstance(o, Path):
-        return o.name
-    if dataclasses.is_dataclass(o) and not isinstance(o, type):
-        d = dict(o.__dict__)
-        d['$type'] = type(o).__name__
-        return d
-    raise TypeError(f'Object of type {type(o)} is not JSON serializable')
 
 
 def entry_point():
@@ -34,7 +27,7 @@ def entry_point():
     if args.finalizer:
         load_finalizer_file(args.finalizer)
     extraction = extract()
-    dumps = json.dumps(extraction, default=default, indent=2)
+    dumps = dataclass_deep_to_json(extraction)
     if args.output:
         with open(args.output, 'w') as f:
             f.write(dumps)

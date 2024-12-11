@@ -164,11 +164,10 @@ class PartialEvaluator(dict):
         self._potential_side_effects = {}
 
     def _remove_side_effects(self, v: Any):
-        if not is_dataclass(v):
-            return
-        i = self._potential_side_effects.pop(id(v), None)
-        if i is not None:
-            self._evaluated[i] = None
+        if is_dataclass(v):
+            i = self._potential_side_effects.pop(id(v), None)
+            if i is not None:
+                self._evaluated[i] = None
         return v
 
     def _walk_remove_side_effect(self, v: Any):
@@ -258,8 +257,8 @@ class PartialEvaluator(dict):
         if key in self.lisp_variables:
             var = self.lisp_variables[key]
             init = False
-            if var.init_value is None:
-                simplified, is_simple = self._to_simple(value)
+            simplified, is_simple = self._to_simple(value)
+            if var.init_value is None or var.init_value == simplified:
                 if is_simple:
                     value = simplified
                     var.init_value = simplified

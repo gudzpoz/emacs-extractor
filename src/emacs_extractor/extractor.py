@@ -15,6 +15,10 @@ from emacs_extractor.variables import (
 )
 
 
+if typing.TYPE_CHECKING:
+    from emacs_extractor.config import SpecificConfig
+
+
 @dataclasses.dataclass
 class FileContents:
     file: Path
@@ -82,7 +86,7 @@ class EmacsExtractor:
             self,
             directory: PathLike[str] | str,
             files: list[str],
-            init_function_configs: dict[str, typing.Any], # use Any to avoid cyclic imports
+            init_function_configs: dict[str, 'SpecificConfig'],
             ignored_constants: set[str],
             preprocessors: typing.Optional[str] = None,
             extra_constants: typing.Optional[dict[str, typing.Any]] = None,
@@ -187,6 +191,8 @@ class EmacsExtractor:
             )
             files.append(file_info)
 
+            self._try_run_extra_extraction(path.name, tree.root_node)
+
             init_functions.update(self._extract_init_functions(tree.root_node, file_info))
         return files, self.all_symbols, init_functions
 
@@ -196,8 +202,11 @@ class EmacsExtractor:
             name = require_text(match['init'])
             if name.startswith('init_') or name.startswith('syms_of_'):
                 functions[name] = (require_single(match['node']), file)
-                if name in self.init_function_configs:
-                    config = self.init_function_configs[name]
-                    if config.extra_extraction is not None:
-                        config.extra_extraction(config, root, self.symbol_mapping)
+                self._try_run_extra_extraction(name, root)
         return functions
+
+    def _try_run_extra_extraction(self, name: str, root: Node):
+        if name in self.init_function_configs:
+            config = self.init_function_configs[name]
+            if config.extra_extraction is not None:
+                config.extra_extraction(self.init_function_configs, root, self.symbol_mapping)

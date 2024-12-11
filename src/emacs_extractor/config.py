@@ -49,7 +49,7 @@ class SpecificConfig:
     '''Extra globals to be added to the evaluation context.'''
 
     extra_extraction: typing.Callable[
-        ['SpecificConfig', Node, dict[str, LispSymbol]],
+        [dict[str, 'SpecificConfig'], Node, dict[str, LispSymbol]],
         None
     ] | None = None
     '''Extra extraction logic to be run after the default extraction logic.'''

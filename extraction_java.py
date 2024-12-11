@@ -2,11 +2,18 @@ import argparse
 import builtins
 import json
 import re
+import textwrap
+from typing import TYPE_CHECKING, Any, cast
 from emacs_extractor.config import (
     EmacsExtraction, InitFunction,
     get_unknown_cmd_flags, set_finalizer,
 )
 from emacs_extractor.partial_eval import *
+from emacs_extractor.utils import dataclass_deep_to_json
+
+
+if TYPE_CHECKING:
+    from extraction_config import BufferLocalProperty
 
 
 def replace_or_insert_region(
@@ -203,11 +210,9 @@ VAR_ARG_FUNCTIONS = {
 }
 ALLOWED_GLOBAL_C_VARS = {
     'cached_system_name': None,
-    'empty_unibyte_string': 'ELispString',
     'gstring_work_headers': None,
     'regular_top_level_message': None,
     'Vcoding_category_table': None,
-    'Vprin1_to_string_buffer': 'ELispBuffer',
 }
 
 
@@ -227,19 +232,31 @@ def export_variables(extraction: EmacsExtraction, symbols: dict[str, str], outpu
             c_name = symbols[var.lisp_name]
             java_name = _c_name_to_java(c_name)
             suffix = ''
+            init = ''
             match var.lisp_type:
                 case 'INT':
                     t = 'ForwardedLong'
+                    if var.init_value is not None:
+                        init = f'{var.init_value}'
                 case 'BOOL':
                     t = 'ForwardedBool'
+                    if var.init_value is not None:
+                        init = f'{'true' if var.init_value else 'false'}'
                 case 'LISP':
                     t = 'Forwarded'
+                    match var.init_value:
+                        case bool(sym):
+                            init = f'{'true' if sym else 'false'}'
+                        case int(i):
+                            init = f'{i}'
+                        case _:
+                            assert var.init_value is None, var.init_value
                 case 'KBOARD':
                     t = 'Forwarded'
                     suffix = ' /* TODO */'
             var_defs.append(
                 f'    private static final ELispSymbol.Value.{t} {java_name} = '
-                f'new ELispSymbol.Value.{t}();{suffix}'
+                f'new ELispSymbol.Value.{t}({init});{suffix}'
             )
             inits.append(f'        {c_name}.initForwardTo({java_name});')
         assert stem not in variables, f'{stem} already defined'
@@ -265,6 +282,8 @@ class PESerializer:
 
     _local_vars: dict[str, str]
 
+    buffer_local_properties: tuple[list['BufferLocalProperty'], list[tuple[str, str | None]]]
+
     symbol_mapping: dict[str, str]
     '''Maps Lisp symbol names to Java variable names.'''
 
@@ -281,6 +300,7 @@ class PESerializer:
             for file in extraction.file_extractions
             for f in file.functions
         }
+        self.buffer_local_properties = ([], [])
         self._local_vars = {}
 
     def reset(self):
@@ -337,6 +357,9 @@ class PESerializer:
                 result = self._expr_to_java(args[0])
                 assert isinstance(result, str)
                 return result
+            case 'current-buffer':
+                assert len(args) == 0
+                return 'currentBuffer()'
             case 'make-variable-buffer-local':
                 assert len(args) == 1
                 return f'{self._expr_to_java(args[0])}.setBufferLocal(true)'
@@ -360,7 +383,7 @@ class PESerializer:
             arg_list = self._java_arg_list(args)
         return f'F{_c_name_to_java_class(f.c_name[1:])}.{_c_name_to_java(f.c_name[1:])}({arg_list})'
 
-    def _java_function_call(self, function: str, args: list[PECValue]) -> str:
+    def _java_function_call(self, function: str, args: list[PECValue]) -> str | None:
         # Need to implement the functions in PE_C_FUNCTIONS as well as
         # PECFunctionCall in extraction_config.py.
         match function:
@@ -408,11 +431,40 @@ class PESerializer:
                 args[2] = args[2] != 0
                 return f'decodeEnvPath({self._java_arg_list(args)})'
             case 'init_buffer_local_defaults':
-                return f'initBufferLocalDefaults(/* TODO */)'
+                assert len(args) == 2
+                assert all(is_dataclass(arg) for arg in cast(Any, args[0]))
+                assert all(isinstance(arg, tuple) for arg in cast(Any, args[1]))
+                self.buffer_local_properties = tuple(cast(Any, args))
+                for var in self.buffer_local_properties[0]:
+                    # I am too lazy to create yet another dataclass...
+                    if var.default is not None:
+                        expr = self._expr_to_java(var.default)
+                        assert isinstance(expr, str)
+                        var.default = expr
+                return None
+            case 'init_buffer_once':
+                assert len(args) == 0
+                return 'ELispBuffer.initBufferLocalVars()'
+            case 'init_buffer_directory':
+                assert len(args) == 2
+                assert args[0] == 'current_buffer'
+                assert args[1] == 'minibuffer_0'
+                return 'ELispBuffer.initDirectory()'
+            case 'set_and_check_load_path':
+                assert len(args) == 0
+                return 'setAndCheckLoadPath()'
+            case 'init_dynlib_suffixes':
+                assert len(args) == 0
+                return 'initDynlibSuffixes()'
+            case 'get_minibuffer':
+                return f'getMiniBuffer({self._java_arg_list(args)})'
             case 'define_charset_internal':
                 return f'defineCharsetInternal({self._java_arg_list(args)})'
             case 'setup_coding_system':
                 return f'setupCodingSystem({self._java_arg_list(args)})'
+            case 'allocate_kboard':
+                # TODO
+                return 'false /* TODO */'
             case _:
                 try:
                     return f'{function}({self._java_arg_list(args)}) /* TODO */'
@@ -437,6 +489,10 @@ class PESerializer:
             case float(f):
                 return str(f)
             case str(s):
+                if '\n' in s:
+                    return f'''"""\n{'\n'.join(
+                        json.dumps(line)[1:-1] for line in s.split('\n')
+                    )}"""'''
                 return json.dumps(s)
             case PELispSymbol(name):
                 return self._java_symbol(name)
@@ -505,17 +561,34 @@ class PESerializer:
         return results
 
 
-def export_initializations(extraction: EmacsExtraction, symbols: dict[str, str], output_file: str):
+MANUALLY_IMPLEMENTED = {
+    'init_charset',
+}
+
+
+def export_initializations(
+        extraction: EmacsExtraction,
+        symbols: dict[str, str],
+        output_file: str,
+        buffer_output_file: str,
+):
     serializer = PESerializer(extraction, symbols)
     initializations = []
     calls = []
     for init in extraction.initializations:
         function = init.name
+        java_function = _c_name_to_java(function)
         serialized = serializer.serialize(init)
         if len(serialized) == 0:
+            if function in MANUALLY_IMPLEMENTED:
+                calls.append(f'        {java_function}();')
             continue
-
-        java_function = _c_name_to_java(function)
+        if function == 'syms_of_editfns':
+            # Prune prin1_to_string_buffer
+            assert serialized[0] == 'var obuf = currentBuffer();'
+            assert serialized[1] == 'FSetBuffer.setBuffer(prin1ToStringBuffer);'
+            assert serialized[3] == 'FSetBuffer.setBuffer(obuf);'
+            serialized = serialized[4:]
         calls.append(f'        {java_function}();')
         initializations.append(f'''
     private static void {java_function}() {{
@@ -536,16 +609,100 @@ def export_initializations(extraction: EmacsExtraction, symbols: dict[str, str],
         )
         f.write(contents)
 
+    with open(buffer_output_file, 'r') as f:
+        contents = f.read()
+    properties, fields = serializer.buffer_local_properties
+    buffer_region = f'''    private final Object[] bufferLocalFields;
+    public static final ELispBuffer DEFAULT_VALUES = new ELispBuffer(Collections.nCopies({
+        len(fields)
+    }, false).toArray());
+    private static final byte[] BUFFER_LOCAL_FLAGS = new byte[{len(fields)}];
+    private static final ELispSymbol[] BUFFER_LOCAL_SYMBOLS = new ELispSymbol[{len(fields)}];
+    {'\n    '.join(
+        f'''{'' if comment is None
+           else f'/**\n{textwrap.indent(comment, '     * ')}\n     */\n    '
+        }public final static int BVAR_{name.upper()} = {i};'''
+        for i, (name, comment) in enumerate(fields)
+    )}
+    {'\n    '.join(
+        f'''public Object get{_c_name_to_java_class(name)}() {{ return bufferLocalFields[BVAR_{
+        name.upper()
+    }]; }}
+    public void set{_c_name_to_java_class(name)}(Object value) {{ bufferLocalFields[BVAR_{
+        name.upper()
+    }] = value; }}'''
+        for name, _ in fields
+    )}
+'''
+    contents = replace_or_insert_region(
+        contents,
+        'struct buffer',
+        buffer_region,
+    )
+
+    buffer_fields = set(field for field, _ in fields)
+    buffer_locals = {
+        var.c_name: var
+        for file in extraction.file_extractions
+        for var in file.per_buffer_variables
+    }
+    buffer_properties = {
+        prop.name: prop
+        for prop in properties
+    }
+    assert all(name in buffer_fields for name in buffer_locals.keys())
+    assert all(name in buffer_fields for name in buffer_properties.keys())
+    lines = []
+    for field, _ in fields:
+        if field in buffer_properties:
+            prop = buffer_properties[field]
+            if prop.default == 'NIL':
+                continue
+            lines.append(f'DEFAULT_VALUES.set{_c_name_to_java_class(field)}({
+                prop.default
+            });')
+    for field, _ in fields:
+        if field in buffer_properties:
+            if buffer_properties[field].permanent_local:
+                lines.append(f'''BUFFER_LOCAL_FLAGS[BVAR_{
+                    field.upper()
+                }] = Byte.MIN_VALUE; // PERMANENT_LOCAL''')
+            else:
+                lines.append(f'''BUFFER_LOCAL_FLAGS[BVAR_{field.upper()}] = {
+                    buffer_properties[field].local_flag
+                };''')
+    for field, _ in fields:
+        if field in buffer_locals:
+            var = buffer_locals[field]
+            java_name = symbols[var.lisp_name]
+            predicate = var.predicate
+            assert predicate.startswith('Q')
+            predicate = predicate[1:].upper()
+            lines.append(f'''{java_name}.initForwardTo(new ELispSymbol.Value.ForwardedPerBuffer(BVAR_{
+                field.upper()
+            }, {predicate}));''')
+            lines.append(f'''BUFFER_LOCAL_SYMBOLS[BVAR_{field.upper()}] = {java_name};''')
+    contents = replace_or_insert_region(
+        contents,
+        'init_buffer_once',
+        f'        {'\n        '.join(lines)}\n',
+        indents=8,
+    )
+
+    with open(buffer_output_file, 'w') as f:
+        f.write(contents)
+
 
 def finalize(extraction: EmacsExtraction):
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--symbols', required=True, help='Symbol output java file')
     parser.add_argument('-g', '--globals', required=True, help='Variable output java file')
+    parser.add_argument('-b', '--buffer', required=True, help='Buffer init output java file')
     args = parser.parse_args(get_unknown_cmd_flags())
 
     symbol_mapping = export_symbols(extraction, args.symbols)
     export_variables(extraction, symbol_mapping, args.globals)
-    export_initializations(extraction, symbol_mapping, args.globals)
+    export_initializations(extraction, symbol_mapping, args.globals, args.buffer)
 
 
 set_finalizer(finalize)

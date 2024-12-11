@@ -1,3 +1,6 @@
+import dataclasses
+import json
+from pathlib import Path
 import re
 import subprocess
 import textwrap
@@ -30,7 +33,7 @@ def require_text(node: Node | None | list[Node]) -> str:
 
 def trim_doc(doc: str) -> str:
     doc = doc.strip()
-    if doc.startswith("/*"):
+    if doc.startswith("/*") or doc.startswith("//"):
         doc = doc[2:]
     if doc.endswith("*/"):
         doc = doc[:-2]
@@ -138,3 +141,17 @@ def preprocess_c(source: str, extra_preprocessors: typing.Optional[str] = None):
     assert stderr is None, stderr
     processed = stdout.decode()
     return _PREPROCESSOR_REMAINS.sub('', processed)
+
+
+def _dataclass_to_json_default(o):
+    if isinstance(o, Path):
+        return o.name
+    if dataclasses.is_dataclass(o) and not isinstance(o, type):
+        d = dict(o.__dict__)
+        d['$type'] = type(o).__name__
+        return d
+    raise TypeError(f'Object of type {type(o)} is not JSON serializable')
+
+
+def dataclass_deep_to_json(obj: typing.Any):
+    return json.dumps(obj, default=_dataclass_to_json_default, indent=2)
