@@ -182,7 +182,7 @@ class EmacsExtractor:
                 global_constants.update({c.name: c.value for c in file_constants})
 
             file_info = FileContents(
-                file=path.relative_to('.'),
+                file=path.absolute(),
                 lisp_variables=lisp,
                 per_buffer_variables=per_buffer,
                 c_variables=c,
