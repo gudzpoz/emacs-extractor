@@ -21,6 +21,8 @@ class InitFunction:
 
 @dataclass
 class EmacsExtraction:
+    '''Extraction output.'''
+
     all_symbols: list[LispSymbol]
     '''All symbols defined in `globals.h`.'''
 
@@ -83,7 +85,7 @@ class EmacsExtractorConfig:
     Currently, these mostly include constants requiring `sizeof` or `offsetof`.'''
 
     ignored_functions: set[str]
-    '''Functions to be ignored when partial-evaluating the code.'''
+    '''Init functions to be ignored when partial-evaluating the code.'''
 
     pe_c_functions: set[str]
     '''Functions to be treated as C functions when partial-evaluating the code.'''
@@ -95,6 +97,25 @@ class EmacsExtractorConfig:
     function_specific_configs: dict[str, SpecificConfig]
     '''Configuration for specific init functions.'''
 
+    pe_eliminate_local_vars: bool = False
+    '''Whether to aggresively inline variable values.
+
+    For example, with `pe_eliminate_local_vars = False`, the code
+    `Vvar_a = 1; Vvar_b = Ffun(Vvar_a); Vvar_a = Fdull(Vvar_b);` will produce:
+    - `Vvar_a[init_value=1]`
+    - `Vvar_b[init_value=None(not set)]`
+    - Init statements:
+      - `Vvar_b = Ffun(1)`
+      - `Vvar_a = Fdull(Vvar_b)`
+    With `pe_eliminate_local_vars = True`, the code will produce:
+    - `Vvar_a[init_value=Fdull(Ffun(1))]`
+    - `Vvar_b[init_value=Ffun(1)]`
+      - When `Vvar_b` is a local variable instead of a lisp var,
+        it will be eliminated.
+
+    I don't know if this handles complex initialization correctly.
+    Use with caution.'''
+
 
 _config: EmacsExtractorConfig | None = None
 
@@ -103,6 +124,9 @@ def get_config() -> EmacsExtractorConfig:
     return require_not_none(_config)
 
 def set_config(config: EmacsExtractorConfig):
+    '''Set the config for the Emacs Extractor.
+
+    Should be called by the config Python file.'''
     global _config
     _config = config
 
@@ -144,6 +168,9 @@ def get_finalizer():
     return _finalizer
 
 def set_finalizer(finalizer: typing.Callable[[EmacsExtraction], None]):
+    '''Set the finalizer for the Emacs Extractor.
+
+    Should be called by the finalizer Python file.'''
     global _finalizer
     _finalizer = finalizer
 

@@ -4,9 +4,9 @@ This is a set of simple python scripts to extract emacs C definitions from Emacs
 including:
 
 - Constants defined by =#define= or =enum=
-- Various varaibles, including those define by =DEFVAR_*= or C global =Lisp_Object= variables.
+- Various varaibles, including those defined by =DEFVAR_*= or C global =Lisp_Object= variables.
 - Symbols defined by =DEFSYM=.
-- Subroutines defined by =DEFUN= or =defun=, exported by =defsubr=.
+- Subroutines defined by =DEFUN=, exported by =defsubr=.
 
 * Usage
 
@@ -40,7 +40,7 @@ $ emacs-extractor "$EMACS_SRC" -c extraction_config.py -o extraction.json
 The scripts are full of hacks and may require quite a bit of regexp engineering.
 Basically, all configurations for extracting structural information lies in a
 Python file, supplied via the =-c/--config= command-line parameter. Please refer
-to the docstrings for more information.
+to the docstrings in [[file:src/emacs_extractor/config.py][config.py]] for more information.
 
 See [[file:extraction_config.py]] for an example. (Tested against Emacs 30 branch.)
 

@@ -27,7 +27,13 @@ def extract() -> EmacsExtraction:
         config.function_specific_configs,
         config.ignored_functions,
     )
-    pe = PartialEvaluator(all_symbols, files, config.pe_c_functions, config.pe_util_functions)
+    pe = PartialEvaluator(
+        all_symbols,
+        files,
+        config.pe_c_functions,
+        config.pe_util_functions,
+        config.pe_eliminate_local_vars,
+    )
     initializations: list[InitFunction] = []
     for call in extractor.init_calls:
         if call.call not in init_functions:

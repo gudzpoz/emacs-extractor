@@ -670,5 +670,6 @@ set_config(
         pe_c_functions=PE_C_FUNCTIONS,
         pe_util_functions=PE_UTIL_FUNCTIONS,
         function_specific_configs=file_specific_configs,
+        pe_eliminate_local_vars=False,
     ),
 )

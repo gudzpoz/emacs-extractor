@@ -128,11 +128,13 @@ class PartialEvaluator(dict):
             files: list[FileContents],
             pe_c_functions: set[str],
             pe_util_functions: dict[str, Callable],
+            eliminate_local_vars: bool = False,
     ):
         self._current = cast(FileContents, None)
         self.files = files
         self.pe_c_functions = pe_c_functions
         self.pe_util_functions = pe_util_functions
+        self.eliminate_local_vars = eliminate_local_vars
         self.constants = {}
         self.lisp_variables = {}
         self.lisp_functions = {}
@@ -256,10 +258,12 @@ class PartialEvaluator(dict):
             v = self.lisp_variables[key]
             # Init values
             if v.lisp_type == 'BOOL':
-                return False
+                return False if v.init_value is None else v.init_value
             if v.lisp_type == 'INT':
-                return 0
-            return PELispVariable(v.lisp_name)
+                return 0 if v.init_value is None else v.init_value
+            return (
+                v.init_value or PELispSymbol('nil')
+            ) if self.eliminate_local_vars else PELispVariable(v.lisp_name)
         if key in self._extra_globals:
             v = self._extra_globals[key]
             return self._watch_side_effects(v)
@@ -296,22 +300,29 @@ class PartialEvaluator(dict):
                     value = simplified
                     var.init_value = simplified
                     init = True
-            if not init:
+            if self.eliminate_local_vars:
+                value = simplified if is_simple else value
+                var.init_value = value
+            elif not init:
                 self._evaluated.append(
                     PELispVariableAssignment(self.lisp_variables[key].lisp_name, value),
                 )
             recorded = PELispVariable(self.lisp_variables[key].lisp_name)
-        elif key in self.c_variables:
-            self._evaluated.append(PECVariableAssignment(key, value, False))
-            recorded = PECVariable(self.c_variables[key].c_name, False)
-        else:
-            self._local_variables.add(key)
-            if is_dataclass(value) and not isinstance(value, PELispSymbol):
-                recorded = PECVariable(key, True)
-                self._evaluated.append(PECVariableAssignment(key, cast(Any, value), True))
+        elif not self.eliminate_local_vars:
+            if key in self.c_variables:
+                self._evaluated.append(PECVariableAssignment(key, value, False))
+                recorded = PECVariable(self.c_variables[key].c_name, False)
             else:
-                recorded = value
-        return super(PartialEvaluator, self).__setitem__(key, recorded)
+                self._local_variables.add(key)
+                if is_dataclass(value) and not isinstance(value, PELispSymbol):
+                    recorded = PECVariable(key, True)
+                    self._evaluated.append(PECVariableAssignment(key, cast(Any, value), True))
+                else:
+                    recorded = value
+        return super(PartialEvaluator, self).__setitem__(
+            key,
+            value if self.eliminate_local_vars else recorded,
+        )
 
     @classmethod
     def _pe_constant(cls, statement: PECValue):
