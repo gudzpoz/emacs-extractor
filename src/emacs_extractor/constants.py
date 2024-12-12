@@ -10,7 +10,7 @@ from emacs_extractor.utils import C_LANG, require_not_none, require_single, requ
 class CConstant:
     name: str
     value: int | str
-    raw_value: str
+    raw_value: str | None
     group: str | None = None
 
 
@@ -35,8 +35,8 @@ def extract_define_constants(
     constants: list[CConstant] = []
     defined: dict[str, CConstant] = update or {}
     for _, match in _DEFINE_CONSTANT_QUERY.matches(root):
-        name = require_not_none(require_single(match['name']).text).decode()
-        value = require_not_none(require_single(match['value']).text).decode()
+        name = require_text(require_single(match['name']))
+        value = require_text(require_single(match['value'])).strip()
         try:
             v = eval(value, global_constants)
             if isinstance(v, int) or isinstance(v, str):
@@ -78,6 +78,8 @@ def extract_enum_constants(root: Node, global_constants: dict[str, typing.Any], 
             group = require_text(match['group'])
             if group in extra_ignored:
                 continue
+        last_raw = None
+        last_raw_index = -1
         for enumerator in require_single(enum_list).named_children:
             if enumerator.type != 'enumerator':
                 continue
@@ -88,6 +90,7 @@ def extract_enum_constants(root: Node, global_constants: dict[str, typing.Any], 
                 continue
             value_node = enumerator.child_by_field_name('value')
             try:
+                raw = None
                 if name in global_constants:
                     value = global_constants[name]
                     if isinstance(value, str):
@@ -95,7 +98,7 @@ def extract_enum_constants(root: Node, global_constants: dict[str, typing.Any], 
                     assert isinstance(value, int)
                     index = value
                 elif value_node is not None:
-                    text = require_text(value_node)
+                    text = require_text(value_node).strip()
                     if ('alignof' in text
                         or 'sizeof' in text
                         or 'offsetof' in text
@@ -109,7 +112,15 @@ def extract_enum_constants(root: Node, global_constants: dict[str, typing.Any], 
                     value = eval(text, global_constants)
                     assert isinstance(value, int), f'{name}: {value}'
                     index = value
-                constants.append(CConstant(name, index, str(index), group))
+                    raw = text
+                    if not text.isdigit():
+                        last_raw = text
+                    last_raw_index = index
+                elif last_raw is not None:
+                    raw = f'{last_raw} + {index - last_raw_index}'
+                if group is None:
+                    group = name
+                constants.append(CConstant(name, index, raw, group))
                 global_constants[name] = index
                 index += 1
             except Exception as e:

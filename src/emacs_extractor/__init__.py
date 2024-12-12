@@ -23,6 +23,7 @@ def extract() -> EmacsExtraction:
 
     transpiler = CTranspiler(
         init_functions,
+        { constant.name for file in files for constant in file.constants },
         config.function_specific_configs,
         config.ignored_functions,
     )

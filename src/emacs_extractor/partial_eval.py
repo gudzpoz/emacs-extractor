@@ -8,6 +8,12 @@ from emacs_extractor.variables import CVariable, LispSymbol, LispVariable
 
 
 @dataclass
+class PEIntConstant:
+    '''Referring to a constant.'''
+    c_name: str
+    value: int
+
+@dataclass
 class PELispVariable:
     '''Referring to the value of a lisp variable defined with `DEFVAR_*`.'''
     lisp_name: str
@@ -52,6 +58,7 @@ class PECVariableAssignment:
     '''True if the variable is a function-local variable.'''
 
 PEValue = Union[
+    PEIntConstant,
     PELispVariable,
     PECVariable,
     PELispSymbol,
@@ -60,6 +67,8 @@ PEValue = Union[
     PELispVariableAssignment,
     PECVariableAssignment,
 ]
+
+PEInt = int | PEIntConstant
 
 @dataclass
 class PELiteral:
@@ -200,11 +209,25 @@ class PartialEvaluator(dict):
             return wrapper
         return v
 
-    def __missing__(self, key: str):
+    def _get_constant(self, key: str) -> int | str | None:
         if key in self.constants:
             return self.constants[key].value
         if key in self._current.constants:
             return self._current.constants[key].value
+        return None
+
+    def _try_get_constant(self, key: str) -> PECValue:
+        constant = self._get_constant(key)
+        if isinstance(constant, int):
+            return PEIntConstant(key, constant)
+        if constant is not None:
+            return constant
+        return self[key]
+
+    def __missing__(self, key: str):
+        constant = self._get_constant(key)
+        if constant is not None:
+            return constant
         if key in self.lisp_symbols:
             return PELispSymbol(self.lisp_symbols[key].lisp_name)
         if key in self.c_variables:
@@ -213,13 +236,15 @@ class PartialEvaluator(dict):
             return self._watch_side_effects(
                 lambda *args: PELispForm(self.lisp_functions[key].lisp_name, (
                     ([] if args[1] == 0 else list(args[1]))
-                    if len(args) == 2 and isinstance(args[0], int)
+                    if len(args) == 2 and isinstance(args[0], PEInt)
                     else list(args)
                 )),
             )
         if key == 'void':
             # The tranpiler converts `(void) 0;` to `void(0)` as a no-op.
             return lambda _: None
+        if key == 'PE_CONSTANT':
+            return self._try_get_constant
         if key == 'PRUNE_SIDE_EFFECT':
             return lambda v: self._remove_side_effects(v)
         if key in self.pe_util_functions:
@@ -250,13 +275,13 @@ class PartialEvaluator(dict):
                 v = False
         if isinstance(v, PECFunctionCall):
             match v.c_name:
-                case 'make_fixnum' if isinstance(v.arguments[0], int):
+                case 'make_fixnum' if isinstance(v.arguments[0], PEInt):
                     v = v.arguments[0]
                 case 'make_float' if isinstance(v.arguments[0], float):
                     v = v.arguments[0]
                 case 'make_string' if isinstance(v.arguments[0], str):
                     v = v.arguments[0]
-        if isinstance(v, (int, float, bool, str)):
+        if isinstance(v, (PEInt, float, bool, str)):
             return v, True
         return v, False
 

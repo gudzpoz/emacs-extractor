@@ -1,3 +1,4 @@
+import json
 import re
 from tree_sitter import Node
 
@@ -14,10 +15,12 @@ class CTranspiler:
     def __init__(
             self,
             init_functions: dict[str, tuple[Node, FileContents]],
+            constants: set[str],
             ignored_patterns: dict[str, SpecificConfig],
             ignored_functions: set[str],
     ) -> None:
         self.init_functions = init_functions
+        self.constants = constants
         self.ignored_patterns = {
             file: config.transpile_replaces
             for file, config in ignored_patterns.items()
@@ -27,6 +30,13 @@ class CTranspiler:
         self._result_stack = []
         self._indentations = [0]
         self._replaces_stack = []
+
+    def _try_preserve_constant(self, node: Node) -> str:
+        if node.type == 'identifier':
+            text = require_text(node)
+            if text in self.constants:
+                return f'PE_CONSTANT({json.dumps(text)})'
+        return self._transpile_expression(node)
 
     def _transpile_expression(self, expression: Node) -> str:
         string_builder: list[bytes] = []
@@ -141,7 +151,7 @@ class CTranspiler:
                     left = self._transpile_expression(
                         require_not_none(node.child_by_field_name('left')),
                     )
-                    right = self._transpile_expression(
+                    right = self._try_preserve_constant(
                         require_not_none(node.child_by_field_name('right')),
                     )
                     if '[' in left and ']' in left:
@@ -159,6 +169,13 @@ class CTranspiler:
                     if function_name in self.init_functions and require_text(node.child_by_field_name('arguments')) == '()':
                         string_builder.append(self.transpile_to_python(function_name).encode())
                         return False
+                    for child in node.children:
+                        if child.type == 'argument_list':
+                            for arg in child.children:
+                                string_builder.append(self._try_preserve_constant(arg).encode())
+                        else:
+                            tree_walker(child, walk_expression)
+                    return False
                 case 'unary_expression':
                     operator = node.child_by_field_name('operator')
                     assert operator is not None

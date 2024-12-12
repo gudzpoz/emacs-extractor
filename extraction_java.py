@@ -1,8 +1,6 @@
 import argparse
-import builtins
 import json
 import re
-import textwrap
 
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
@@ -217,6 +215,17 @@ def _c_name_to_java_class(c_name: str):
 def _c_var_name_to_java(c_name: str):
     return _c_name_to_java(c_name[1:] if c_name.startswith('V') else c_name)
 
+def _javadoc(docstring: str, pre: bool = False):
+    lines = escape_xml(docstring.replace('\t', '        ')).splitlines()
+    doc_lines = ['     * <pre>'] if pre else []
+    for line in lines:
+        if line.strip() == '':
+            doc_lines.append('     *')
+        else:
+            doc_lines.append(f'     * {line}')
+    if pre:
+        doc_lines.append('     * </pre>')
+    return f'/**\n{'\n'.join(doc_lines)}\n     */'
 
 VAR_ARG_FUNCTIONS = {
     'make-hash-table',
@@ -230,7 +239,7 @@ ALLOWED_GLOBAL_C_VARS = {
 }
 
 
-def export_variables(extraction: EmacsExtraction, symbols: dict[str, str], output_file: str):
+def export_variables(extraction: EmacsExtraction, constants: dict[str, str], symbols: dict[str, str], output_file: str):
     '''Generates definitions of forwarded lisp variables.'''
     files = []
     variables: dict[str, str] = {}
@@ -251,8 +260,12 @@ def export_variables(extraction: EmacsExtraction, symbols: dict[str, str], outpu
             match var.lisp_type:
                 case 'INT':
                     t = 'ForwardedLong'
-                    if var.init_value is not None:
-                        init = f'{var.init_value}'
+                    init_value = var.init_value
+                    if init_value is not None:
+                        if isinstance(init_value, PEIntConstant):
+                            init = constants.get(init_value.c_name, f'{init_value.value}')
+                        else:
+                            init = f'{init_value}'
                 case 'BOOL':
                     t = 'ForwardedBool'
                     if var.init_value is not None:
@@ -264,6 +277,8 @@ def export_variables(extraction: EmacsExtraction, symbols: dict[str, str], outpu
                             init = f'{'true' if sym else 'false'}'
                         case int(i):
                             init = f'{i}L'
+                        case PEIntConstant(name, value):
+                            init = constants.get(name, f'{value}L')
                         case float(f):
                             init = f'{f}'
                         case str(s):
@@ -296,6 +311,85 @@ def export_variables(extraction: EmacsExtraction, symbols: dict[str, str], outpu
         f.write(contents)
 
 
+CONSTANT_GROUPS = {
+    # lisp.h
+    'CHARTAB_SIZE_BITS',
+    'Lisp_Closure',
+    'char_bits',
+    # character.h
+    'NO_BREAK_SPACE',
+    'UNICODE_CATEGORY_UNKNOWN',
+    # charset.h
+    'define_charset_arg_index',
+    'charset_attr_index',
+    # coding.h
+    'define_coding_system_arg_index',
+    'define_coding_iso2022_arg_index',
+    'define_coding_utf8_arg_index',
+    'define_coding_utf16_arg_index',
+    'define_coding_ccl_arg_index',
+    'define_coding_undecided_arg_index',
+    'coding_attr_index',
+    'coding_result_code',
+    # syntax.h
+    'syntaxcode',
+    # coding.c
+    'coding_category',
+}
+CONSTANT_REGEXPS = {
+    'lisp.h': ['CHAR_TABLE_STANDARD_SLOTS', 'MAX_CHAR', 'MAX_UNICODE_CHAR'],
+    'character.h': ['MAX_._BYTE_CHAR'],
+    'coding.h': [r'CODING_\w+_MASK'],
+    'coding.c': [r'CODING_ISO_FLAG_\w+'],
+}
+
+
+def export_constants(extraction: EmacsExtraction, symbols: dict[str, str], output_file: str):
+    '''Exports extracted constants.'''
+    with open(output_file, 'r') as f:
+        contents = f.read()
+
+    java_symbols = set(symbols.values())
+    encoded: dict[str, str] = {}
+    for file in extraction.file_extractions:
+        groups: list[str] = []
+        group_constants: dict[str, list[CConstant]] = {}
+        regexps = [re.compile(regexp) for regexp in CONSTANT_REGEXPS.get(file.file.name, [])]
+        region = []
+        for constant in file.constants:
+            if constant.group in CONSTANT_GROUPS:
+                group = constant.group
+            else:
+                for reg in regexps:
+                    if reg.fullmatch(constant.name):
+                        group = reg.pattern
+                        break
+                else:
+                    continue
+            if group not in groups:
+                groups.append(group)
+                group_constants[group] = []
+            group_constants[group].append(constant)
+        for group in groups:
+            region = []
+            for constant in group_constants[group]:
+                java_name = constant.name.upper()
+                if java_name in java_symbols:
+                    java_name += '_INIT'
+                encoded[constant.name] = java_name
+                assert isinstance(constant.value, int)
+                value = f'{constant.raw_value or constant.value}'
+                value = ' '.join(encoded.get(s, s) for s in value.split(' '))
+                region.append(f'public static final int {java_name} = {value};')
+            contents = replace_or_insert_region(
+                contents, group,
+                f'    {'\n    '.join(region)}\n',
+            )
+    with open(output_file, 'w') as f:
+        f.write(contents)
+    return encoded
+
+
 class PESerializer:
     '''Serializes a list of `PEValue`s into Java code.'''
 
@@ -306,8 +400,11 @@ class PESerializer:
     symbol_mapping: dict[str, str]
     '''Maps Lisp symbol names to Java variable names.'''
 
-    def __init__(self, extraction: EmacsExtraction, symbols: dict[str, str]):
+    _arg_list_indent: int
+
+    def __init__(self, extraction: EmacsExtraction, constants: dict[str, str], symbols: dict[str, str]):
         self.extraction = extraction
+        self.constants = constants
         self.symbol_mapping = symbols
         self.lisp_variables = {
             f.lisp_name: f
@@ -321,9 +418,11 @@ class PESerializer:
         }
         self.buffer_local_properties = ([], [])
         self._local_vars = {}
+        self._arg_list_indent = 12
 
     def reset(self):
         self._local_vars = {}
+        self._arg_list_indent = 12
 
     def _java_symbol(self, symbol: str) -> str:
         java_name = self.symbol_mapping.get(symbol)
@@ -342,14 +441,21 @@ class PESerializer:
 
     def _java_arg_list(self, args: list[PECValue] | list[PEValue], joiner: str = ', ') -> str:
         arg_list = []
+        indent = len(args) > 6 and joiner == ', '
+        if indent:
+            self._arg_list_indent += 4
         for arg in args:
             v = self._expr_to_java(arg)
             assert isinstance(v, str)
             arg_list.append(v)
-        indent = len(arg_list) > 6 and joiner == ', '
         if indent:
-            joiner = f',\n{' ' * 12}'
-        return joiner.join(arg_list) + (indent and '\n        ' or '')
+            self._arg_list_indent -= 4
+            spaces = ' ' * self._arg_list_indent
+            joiner = f',\n{spaces}'
+        text = joiner.join(arg_list)
+        if indent:
+            text = f'\n{spaces}{text}\n{' ' * (self._arg_list_indent - 4)}'
+        return text
 
     def _java_lisp_call(self, function: str, args: list[PEValue]) -> str:
         # Things should still work without the following match-case, but
@@ -391,8 +497,8 @@ class PESerializer:
                 return f'unintern({self._expr_to_java(args[0])})'
             case 'define-coding-system-internal':
                 return f'defineCodingSystemInternal(new Object[]{{{self._java_arg_list(
-                    [arg or False for arg in args], ',\n            '
-                )}\n        }})'
+                    [arg or False for arg in args]
+                )}}})'
         assert function in self.lisp_functions
         f = self.lisp_functions[function]
         assert f.c_name.startswith('F')
@@ -413,11 +519,17 @@ class PESerializer:
                 assert len(args) == 1
                 return f'(double) ({self._expr_to_java(args[0])})'
             case 'make_string':
-                assert len(args) == 2 and isinstance(args[1], int)
+                assert len(args) == 2 and isinstance(args[1], PEInt)
                 return f'new ELispString({self._expr_to_java(args[0])})'
             case 'make_vector':
-                assert len(args) == 2 and isinstance(args[0], int)
-                return f'new ELispVector({args[0]}, {self._expr_to_java(self._boolean(args[1]))})'
+                assert len(args) == 2 and isinstance(args[0], PEInt)
+                if isinstance(args[0], PEIntConstant):
+                    length = self.constants.get(args[0].c_name, args[0].value)
+                else:
+                    length = f'{args[0]}'
+                return f'''new ELispVector({length}, {
+                    self._expr_to_java(self._boolean(args[1]))
+                })'''
             case 'make_symbol_constant':
                 assert len(args) == 1
                 return f'{self._expr_to_java(args[0])}.setConstant(true)'
@@ -562,8 +674,10 @@ class PESerializer:
                 return f'{prefix}{local_var} = {self._expr_to_java(value)}'
             case PELiteral(value):
                 return value
-            case builtins.list:
-                pass
+            case PEIntConstant(name, value):
+                if name in self.constants:
+                    return self.constants[name]
+                return self._expr_to_java(value)
             case _:
                 raise Exception(f'Unknown expression type: {pe_value}')
 
@@ -589,12 +703,13 @@ MANUALLY_IMPLEMENTED = {
 
 def export_initializations(
         extraction: EmacsExtraction,
+        constants: dict[str, str],
         symbols: dict[str, str],
         output_file: str,
         buffer_output_file: str,
 ):
     '''Generates initialization code for PE AST and buffer-local definitions.'''
-    serializer = PESerializer(extraction, symbols)
+    serializer = PESerializer(extraction, constants, symbols)
     initializations = []
     calls = []
     for init in extraction.initializations:
@@ -642,7 +757,7 @@ def export_initializations(
     private static final ELispSymbol[] BUFFER_LOCAL_SYMBOLS = new ELispSymbol[{len(fields)}];
     {'\n    '.join(
         f'''{'' if comment is None
-           else f'/**\n{textwrap.indent(comment, '     * ')}\n     */\n    '
+           else f'{_javadoc(comment)}\n    '
         }public final static int BVAR_{name.upper()} = {i};'''
         for i, (name, comment) in enumerate(fields)
     )}
@@ -810,11 +925,7 @@ def export_subroutines_in_file(extraction: FileContents, output: Path):
         else:
             assert max_args == len(subroutine.args), (max_args, subroutine)
         subroutine.args = [_c_name_to_java(arg) for arg in subroutine.args]
-        javadoc = f'''/**
-     * <pre>
-{textwrap.indent(escape_xml(subroutine.doc), '     * ')}
-     * </pre>
-     */'''
+        javadoc = _javadoc(subroutine.doc, True)
         if fname in existing:
             info = existing[fname]
             assert info['name'] == subroutine.lisp_name
@@ -851,7 +962,7 @@ def export_subroutines_in_file(extraction: FileContents, output: Path):
                 else:
                     args.append(f'Object {arg}')
             body = f'''@Specialization
-        public static Void {fname}({', '.join(args)}) {{
+        public static Void {_c_name_to_java(subroutine.c_name[1:])}({', '.join(args)}) {{
             throw new UnsupportedOperationException();
         }}'''
         original += f'''
@@ -863,6 +974,8 @@ def export_subroutines_in_file(extraction: FileContents, output: Path):
     }}
 '''
     original += '}\n'
+    with open(output, 'w') as f:
+        f.write(original)
 
 
 def export_subroutines(extraction: EmacsExtraction, output_dir: str):
@@ -883,14 +996,16 @@ def export_subroutines(extraction: EmacsExtraction, output_dir: str):
 def finalize(extraction: EmacsExtraction):
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--symbols', required=True, help='Symbol output java file')
+    parser.add_argument('-C', '--constants', required=True, help='Constant output java file')
     parser.add_argument('-g', '--globals', required=True, help='Variable output java file')
     parser.add_argument('-b', '--buffer', required=True, help='Buffer init output java file')
     parser.add_argument('-d', '--builtin-dir', required=True, help='Directory for java classes of subroutines')
     args = parser.parse_args(get_unknown_cmd_flags())
 
     symbol_mapping = export_symbols(extraction, args.symbols)
-    export_variables(extraction, symbol_mapping, args.globals)
-    export_initializations(extraction, symbol_mapping, args.globals, args.buffer)
+    constants = export_constants(extraction, symbol_mapping, args.constants)
+    export_variables(extraction, constants, symbol_mapping, args.globals)
+    export_initializations(extraction, constants, symbol_mapping, args.globals, args.buffer)
     export_subroutines(extraction, args.builtin_dir)
 
 
