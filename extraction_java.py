@@ -289,17 +289,17 @@ def export_variables(extraction: EmacsExtraction, constants: dict[str, str], sym
                     t = 'Forwarded'
                     suffix = ' /* TODO */'
             var_defs.append(
-                f'    private static final ELispSymbol.Value.{t} {java_name} = '
-                f'new ELispSymbol.Value.{t}({init});{suffix}'
+                f'    private final ValueStorage.{t} {java_name} = '
+                f'new ValueStorage.{t}({init});{suffix}'
             )
             inits.append(f'        {c_name}.initForwardTo({java_name});')
         assert stem not in variables, f'{stem} already defined'
         variables[stem] = f'''{'\n'.join(var_defs)}
-    private static void {stem}Vars() {{
+    private void {stem}Vars() {{
 {'\n'.join(inits)}
     }}'''
     all_inits = sorted(variables.items(), key=lambda kv: kv[0])
-    inits = f'''    public static void initGlobalVariables() {{
+    inits = f'''    public void initGlobalVariables() {{
 {'\n'.join(f'        {stem}Vars();' for stem, _ in all_inits)}
     }}
 {'\n'.join(init for _, init in all_inits)}
@@ -575,12 +575,15 @@ class PESerializer:
                 return None
             case 'init_buffer_once':
                 assert len(args) == 0
-                return 'ELispBuffer.initBufferLocalVars()'
+                return 'ELispBuffer.initBufferLocalVars(bufferDefaults)'
             case 'init_buffer_directory':
                 assert len(args) == 2
                 assert args[0] == 'current_buffer'
                 assert args[1] == 'minibuffer_0'
                 return 'ELispBuffer.initDirectory()'
+            case 'set_buffer_default_category_table':
+                assert len(args) == 1
+                return f'bufferDefaults.setCategoryTable({self._expr_to_java(args[0])})'
             case 'set_and_check_load_path':
                 assert len(args) == 0
                 return 'setAndCheckLoadPath()'
@@ -590,7 +593,7 @@ class PESerializer:
             case 'get_minibuffer':
                 return f'getMiniBuffer({self._java_arg_list(args)})'
             case 'define_charset_internal':
-                return f'defineCharsetInternal({self._java_arg_list(args)})'
+                return f'defineCharsetInternal({self._java_arg_list([PELiteral('this')] + args)})'
             case 'setup_coding_system':
                 return f'setupCodingSystem({self._java_arg_list(args)})'
             case 'allocate_kboard':
@@ -718,7 +721,7 @@ def export_initializations(
         serialized = serializer.serialize(init)
         if len(serialized) == 0:
             if function in MANUALLY_IMPLEMENTED:
-                calls.append(f'        {java_function}();')
+                calls.append(f'        {java_function}(ctx);')
             continue
         if function == 'syms_of_editfns':
             # Prune prin1_to_string_buffer
@@ -728,10 +731,10 @@ def export_initializations(
             serialized = serialized[4:]
         calls.append(f'        {java_function}();')
         initializations.append(f'''
-    private static void {java_function}() {{
+    private void {java_function}() {{
         {'\n        '.join(serialized)}
     }}''')
-    region = f'''    public static void postInitVariables() {{
+    region = f'''    public void postInitVariables() {{
 {'\n'.join(calls)}
     }}
 {''.join(initializations)}
@@ -750,11 +753,7 @@ def export_initializations(
         contents = f.read()
     properties, fields = serializer.buffer_local_properties
     buffer_region = f'''    private final Object[] bufferLocalFields;
-    public static final ELispBuffer DEFAULT_VALUES = new ELispBuffer(Collections.nCopies({
-        len(fields)
-    }, false).toArray());
     private static final byte[] BUFFER_LOCAL_FLAGS = new byte[{len(fields)}];
-    private static final ELispSymbol[] BUFFER_LOCAL_SYMBOLS = new ELispSymbol[{len(fields)}];
     {'\n    '.join(
         f'''{'' if comment is None
            else f'{_javadoc(comment)}\n    '
@@ -795,9 +794,9 @@ def export_initializations(
             prop = buffer_properties[field]
             if prop.default == 'NIL':
                 continue
-            lines.append(f'DEFAULT_VALUES.set{_c_name_to_java_class(field)}({
+            lines.append(f'''defaultValues.set{_c_name_to_java_class(field)}({
                 prop.default
-            });')
+            });''')
     for field, _ in fields:
         if field in buffer_properties:
             if buffer_properties[field].permanent_local:
@@ -815,10 +814,9 @@ def export_initializations(
             predicate = var.predicate
             assert predicate.startswith('Q')
             predicate = predicate[1:].upper()
-            lines.append(f'''{java_name}.initForwardTo(new ELispSymbol.Value.ForwardedPerBuffer(BVAR_{
+            lines.append(f'''{java_name}.initForwardTo(new ValueStorage.ForwardedPerBuffer(BVAR_{
                 field.upper()
             }, {predicate}));''')
-            lines.append(f'''BUFFER_LOCAL_SYMBOLS[BVAR_{field.upper()}] = {java_name};''')
     contents = replace_or_insert_region(
         contents,
         'init_buffer_once',
@@ -995,14 +993,13 @@ def export_subroutines(extraction: EmacsExtraction, output_dir: str):
 
 def finalize(extraction: EmacsExtraction):
     parser = argparse.ArgumentParser()
-    parser.add_argument('-s', '--symbols', required=True, help='Symbol output java file')
     parser.add_argument('-C', '--constants', required=True, help='Constant output java file')
     parser.add_argument('-g', '--globals', required=True, help='Variable output java file')
     parser.add_argument('-b', '--buffer', required=True, help='Buffer init output java file')
     parser.add_argument('-d', '--builtin-dir', required=True, help='Directory for java classes of subroutines')
     args = parser.parse_args(get_unknown_cmd_flags())
 
-    symbol_mapping = export_symbols(extraction, args.symbols)
+    symbol_mapping = export_symbols(extraction, args.globals)
     constants = export_constants(extraction, symbol_mapping, args.constants)
     export_variables(extraction, constants, symbol_mapping, args.globals)
     export_initializations(extraction, constants, symbol_mapping, args.globals, args.buffer)

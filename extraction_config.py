@@ -348,6 +348,16 @@ file_specific_configs = {
             'PATH_EXEC': PATH_EXEC,
         },
     ),
+    # category.c
+    'init_category_once': SpecificConfig(
+        # Vstandard_category_table is defined as BVAR(&buffer_defaults, category_table)
+        statement_remapper=lambda statements, _: [
+            *statements,
+            PECFunctionCall('set_buffer_default_category_table', [
+                PECVariable('Vstandard_category_table', True),
+            ]),
+        ]
+    ),
     # charset.c
     'syms_of_charset': SpecificConfig(
         transpile_replaces=[

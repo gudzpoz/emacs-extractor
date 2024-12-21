@@ -19,5 +19,3 @@ emacs-extractor = "emacs_extractor.__main__:entry_point"
 [tool.pdm]
 distribution = true
 
-[dependency-groups]
-dev = ["notebook>=7.2.2"]
