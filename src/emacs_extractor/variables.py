@@ -8,8 +8,8 @@ from emacs_extractor.constants import extract_define_constants
 from emacs_extractor.utils import C_LANG, get_declarator, parse_c, require_not_none, require_single, require_text
 
 
-LISP_VAR_TYPES = typing.Literal['BOOL', 'INT', 'LISP', 'KBOARD']
-_DEFVAR_KINDS: dict[str, LISP_VAR_TYPES | typing.Literal['PER_BUFFER']] = {
+LISP_VAR_TYPES = typing.Literal['BOOL', 'INT', 'LISP']
+_DEFVAR_KINDS: dict[str, LISP_VAR_TYPES | typing.Literal['PER_BUFFER', 'KBOARD']] = {
     'DEFVAR_BOOL': 'BOOL',
     'DEFVAR_INT': 'INT',
     'DEFVAR_LISP': 'LISP',
@@ -126,6 +126,7 @@ def extract_variables(root_node: Node):
                     static=static,
                 ))
     buffer_locals: list[PerBufferVariable] = []
+    kboard_locals: list[LispVariable] = []
     lisp_variables: list[LispVariable] = []
     for _, match in _DEFVAR_MATCH_QUERY.matches(root_node):
         nodes = match['node']
@@ -149,13 +150,17 @@ def extract_variables(root_node: Node):
             assert len(matches) == 1, require_text(node)
             _, match = matches[0]
             kind = typing.cast(LISP_VAR_TYPES, kind)
-            lisp_variables.append(LispVariable(
+            variable = LispVariable(
                 lisp_name=eval(require_text(match['lisp_name'])),
                 c_name=require_text(match['c_name']),
                 lisp_type=kind,
                 init_value=None,
-            ))
-    return c_variables, lisp_variables, buffer_locals
+            )
+            if kind == 'KBOARD':
+                kboard_locals.append(variable)
+            else:
+                lisp_variables.append(variable)
+    return c_variables, lisp_variables, buffer_locals, kboard_locals
 
 
 @dataclasses.dataclass

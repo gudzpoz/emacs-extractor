@@ -212,7 +212,7 @@ class CTranspiler:
                 pattern = (pattern, None)
             replaces.append((re.compile(pattern[0], re.MULTILINE), pattern[1]))
         self._replaces_stack.append(replaces)
-        transpiled = self._transpile_to_python(self.init_functions[named_function][0])
+            transpiled = self._transpile_to_python(self.init_functions[named_function][0])
         self._replaces_stack.pop()
         return '\n'.join(transpiled)
 
@@ -248,9 +248,13 @@ class CTranspiler:
                     results.extend(self._transpile_to_python(child))
                     continue
                 case 'if_statement':
-                    results.append(f'if ({self._try_replace(self._transpile_expression(
+                    condition = self._try_replace(self._transpile_expression(
                         require_not_none(child.child_by_field_name('condition'))
-                    ))}):')
+                    ))
+                    if condition.startswith('#'):
+                        results.append(f'# if ({condition}):')
+                    else:
+                        results.append(f'if ({condition}):')
                     self._indentations.append(4)
                     then = require_not_none(child.child_by_field_name('consequence'))
                     results.extend(self._indent(self._transpile_to_python(then)))
@@ -306,7 +310,7 @@ class CTranspiler:
                     continue
                 case 'return_statement':
                     value = self._transpile_expression(require_single(child.named_children))
-                    value = f'return {value}'
+                        value = f'return {value}'
                 case 'expression_statement':
                     if len(child.children) == 1:
                         assert child.children[0].type == ';', child.children

@@ -107,6 +107,34 @@ def extract_keyboard_c(
     config.extra_globals['lispy_wheel_names'] = _extract_string_array(root, 'lispy_wheel_names')
 
 
+def extract_struct(root: Node, query: Query, config: SpecificConfig, var_name: str, suffixed: bool = True):
+    _, match = require_single(query.matches(root))
+    struct_fields: list[tuple[str, str | None]] = []
+    last_comment, last_comment_line = None, -1
+    for field in require_single(match['fields']).named_children:
+        if field.type == 'comment':
+            last_comment = trim_doc(require_text(field))
+            last_comment_line = field.end_point.row
+            continue
+        assert field.type == 'field_declaration', field
+        if require_text(field.child_by_field_name('type')) != 'Lisp_Object':
+            continue
+        field_name = require_text(field.child_by_field_name('declarator'))
+        if '*' in field_name:
+            continue
+        if suffixed:
+            assert field_name.endswith('_'), field_name
+            field_name = field_name[:-1]
+        comment = last_comment if (
+            field.start_point.row == last_comment_line
+            or field.start_point.row == last_comment_line + 1
+        ) else None
+        struct_fields.append((field_name, comment))
+    if config.extra_globals is None:
+        config.extra_globals = {}
+    config.extra_globals[var_name] = struct_fields
+
+
 STRUCT_BUFFER_QUERY = Query(C_LANG, '''
 (struct_specifier
  (type_identifier) @name (#eq? @name "buffer")
@@ -120,26 +148,36 @@ def extract_struct_buffer(
         root: Node,
         symbol_mapping: dict[str, LispSymbol]
 ):
-    _, match = require_single(STRUCT_BUFFER_QUERY.matches(root))
-    buffer_fields = []
-    last_comment, last_comment_line = None, -1
-    for field in require_single(match['fields']).named_children:
-        if field.type == 'comment':
-            last_comment = trim_doc(require_text(field))
-            last_comment_line = field.end_point.row
-            continue
-        assert field.type == 'field_declaration', field
-        if require_text(field.child_by_field_name('type')) != 'Lisp_Object':
-            continue
-        field_name = require_text(field.child_by_field_name('declarator'))
-        assert field_name.endswith('_')
-        field_name = field_name[:-1]
-        comment = last_comment if (
-            field.start_point.row == last_comment_line
-            or field.start_point.row == last_comment_line + 1
-        ) else None
-        buffer_fields.append((field_name, comment))
-    config = configs['init_buffer_once']
-    if config.extra_globals is None:
-        config.extra_globals = {}
-    config.extra_globals['struct_buffer_fields'] = buffer_fields
+    extract_struct(root, STRUCT_BUFFER_QUERY, configs['init_buffer_once'], 'struct_buffer_fields')
+
+
+STRUCT_KBOARD_QUERY = Query(C_LANG, '''
+(struct_specifier
+ (type_identifier) @name (#eq? @name "kboard")
+ (field_declaration_list) @fields
+)
+''')
+
+
+def extract_struct_kboard(
+        configs: dict[str, SpecificConfig],
+        root: Node,
+        symbol_mapping: dict[str, LispSymbol]
+):
+    extract_struct(root, STRUCT_KBOARD_QUERY, configs['init_keyboard'], 'struct_kboard_fields')
+
+
+STRUCT_FRAME_QUERY = Query(C_LANG, '''
+(struct_specifier
+ (type_identifier) @name (#eq? @name "frame")
+ (field_declaration_list) @fields
+)
+''')
+
+
+def extract_struct_frame(
+        configs: dict[str, SpecificConfig],
+        root: Node,
+        symbol_mapping: dict[str, LispSymbol]
+):
+    extract_struct(root, STRUCT_FRAME_QUERY, configs['init_frame_once'], 'struct_frame_fields', False)

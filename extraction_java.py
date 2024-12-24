@@ -103,7 +103,7 @@ def export_symbols(extraction: EmacsExtraction, output_file: str):
     variable_symbols: list[tuple[str, str]] = []
     per_buffer_variables: list[tuple[str, str]] = []
     for file in extraction.file_extractions:
-        for var in file.lisp_variables:
+        for var in file.lisp_variables + file.per_kboard_variables:
             c_name = var.lisp_name.replace('-', '_').upper()
             if c_name in defined:
                 if defined[c_name] == var.lisp_name:
@@ -285,14 +285,11 @@ def export_variables(extraction: EmacsExtraction, constants: dict[str, str], sym
                             init = f'new ELispString({json.dumps(s)})'
                         case _:
                             assert var.init_value is None, var.init_value
-                case 'KBOARD':
-                    t = 'Forwarded'
-                    suffix = ' /* TODO */'
             var_defs.append(
                 f'    private final ValueStorage.{t} {java_name} = '
                 f'new ValueStorage.{t}({init});{suffix}'
             )
-            inits.append(f'        {c_name}.initForwardTo({java_name});')
+            inits.append(f'        initForwardTo({c_name}, {java_name});')
         assert stem not in variables, f'{stem} already defined'
         variables[stem] = f'''{'\n'.join(var_defs)}
     private void {stem}Vars() {{
@@ -396,6 +393,8 @@ class PESerializer:
     _local_vars: dict[str, str]
 
     buffer_local_properties: tuple[list['BufferLocalProperty'], list[tuple[str, str | None]]]
+    frame_fields: list[tuple[str, str | None]]
+    kboard_fields: list[tuple[str, str | None]]
 
     symbol_mapping: dict[str, str]
     '''Maps Lisp symbol names to Java variable names.'''
@@ -417,6 +416,8 @@ class PESerializer:
             for f in file.functions
         }
         self.buffer_local_properties = ([], [])
+        self.frame_fields = []
+        self.kboard_fields = []
         self._local_vars = {}
         self._arg_list_indent = 12
 
@@ -561,6 +562,16 @@ class PESerializer:
                     args[0] = PELiteral('null')
                 args[2] = args[2] != 0
                 return f'decodeEnvPath({self._java_arg_list(args)})'
+            case 'init_frame_fields':
+                assert len(args) == 1
+                assert all(isinstance(arg, tuple) for arg in cast(Any, args[0]))
+                self.frame_fields = cast(Any, args[0])
+                return None
+            case 'init_kboard_fields':
+                assert len(args) == 1
+                assert all(isinstance(arg, tuple) for arg in cast(Any, args[0]))
+                self.kboard_fields = cast(Any, args[0])
+                return 'ELispKboard.initKboardLocalVars(ctx)'
             case 'init_buffer_local_defaults':
                 assert len(args) == 2
                 assert all(is_dataclass(arg) for arg in cast(Any, args[0]))
@@ -575,7 +586,7 @@ class PESerializer:
                 return None
             case 'init_buffer_once':
                 assert len(args) == 0
-                return 'ELispBuffer.initBufferLocalVars(bufferDefaults)'
+                return 'ELispBuffer.initBufferLocalVars(ctx, bufferDefaults)'
             case 'init_buffer_directory':
                 assert len(args) == 2
                 assert args[0] == 'current_buffer'
@@ -593,9 +604,13 @@ class PESerializer:
             case 'get_minibuffer':
                 return f'getMiniBuffer({self._java_arg_list(args)})'
             case 'define_charset_internal':
-                return f'defineCharsetInternal({self._java_arg_list([PELiteral('this')] + args)})'
+                return f'builtInCharSet.defineCharsetInternal({self._java_arg_list([PELiteral('this')] + args)})'
             case 'setup_coding_system':
-                return f'setupCodingSystem({self._java_arg_list(args)})'
+                assert len(args) == 2
+                assert self._expr_to_java(args[1]) == 'safeTerminalCoding'
+                return f'''builtInCoding.setupCodingSystem({
+                    self._expr_to_java(args[0])
+                }, builtInCoding.safeTerminalCoding)'''
             case 'allocate_kboard':
                 # TODO
                 return 'false /* TODO */'
@@ -698,9 +713,9 @@ class PESerializer:
 
 
 MANUALLY_IMPLEMENTED = {
-    'init_casetab_once',
-    'init_charset',
-    'init_syntax_once',
+    'init_casetab_once': 'builtInCaseTab.initCaseTabOnce(ctx)',
+    'init_charset': 'initCharset()',
+    'init_syntax_once': 'builtInSyntax.initSyntaxOnce(ctx)',
 }
 
 
@@ -709,7 +724,6 @@ def export_initializations(
         constants: dict[str, str],
         symbols: dict[str, str],
         output_file: str,
-        buffer_output_file: str,
 ):
     '''Generates initialization code for PE AST and buffer-local definitions.'''
     serializer = PESerializer(extraction, constants, symbols)
@@ -721,7 +735,7 @@ def export_initializations(
         serialized = serializer.serialize(init)
         if len(serialized) == 0:
             if function in MANUALLY_IMPLEMENTED:
-                calls.append(f'        {java_function}(ctx);')
+                calls.append(f'        {MANUALLY_IMPLEMENTED[function]};')
             continue
         if function == 'syms_of_editfns':
             # Prune prin1_to_string_buffer
@@ -748,23 +762,31 @@ def export_initializations(
             region,
         )
         f.write(contents)
+    return serializer
 
-    with open(buffer_output_file, 'r') as f:
+
+def export_forwardable_locals(
+        output_file: str,
+        fields: list[tuple[str, str | None]],
+        array_field: str,
+        const_prefix: str,
+        tag: str,
+        extra: str = '',
+):
+    with open(output_file, 'r') as f:
         contents = f.read()
-    properties, fields = serializer.buffer_local_properties
-    buffer_region = f'''    private final Object[] bufferLocalFields;
-    private static final byte[] BUFFER_LOCAL_FLAGS = new byte[{len(fields)}];
-    {'\n    '.join(
+    buffer_region = f'''    private final Object[] {array_field};
+{extra}    {'\n    '.join(
         f'''{'' if comment is None
            else f'{_javadoc(comment)}\n    '
-        }public final static int BVAR_{name.upper()} = {i};'''
+        }public final static int {const_prefix}{name.upper()} = {i};'''
         for i, (name, comment) in enumerate(fields)
     )}
     {'\n    '.join(
-        f'''public Object get{_c_name_to_java_class(name)}() {{ return bufferLocalFields[BVAR_{
+        f'''public Object get{_c_name_to_java_class(name)}() {{ return {array_field}[{const_prefix}{
         name.upper()
     }]; }}
-    public void set{_c_name_to_java_class(name)}(Object value) {{ bufferLocalFields[BVAR_{
+    public void set{_c_name_to_java_class(name)}(Object value) {{ {array_field}[{const_prefix}{
         name.upper()
     }] = value; }}'''
         for name, _ in fields
@@ -772,10 +794,26 @@ def export_initializations(
 '''
     contents = replace_or_insert_region(
         contents,
-        'struct buffer',
+        tag,
         buffer_region,
     )
+    return contents
 
+
+def export_buffer_locals(
+        extraction: EmacsExtraction,
+        symbols: dict[str, str],
+        serializer: PESerializer,
+        buffer_output_file: str,
+):
+    properties, fields = serializer.buffer_local_properties
+    contents = export_forwardable_locals(
+        buffer_output_file, fields,
+        'bufferLocalFields',
+        'BVAR_',
+        'struct buffer',
+        f'private static final byte[] BUFFER_LOCAL_FLAGS = new byte[{len(fields)}];\n',
+    )
     buffer_fields = set(field for field, _ in fields)
     buffer_locals = {
         var.c_name: var
@@ -814,7 +852,7 @@ def export_initializations(
             predicate = var.predicate
             assert predicate.startswith('Q')
             predicate = predicate[1:].upper()
-            lines.append(f'''{java_name}.initForwardTo(new ValueStorage.ForwardedPerBuffer(BVAR_{
+            lines.append(f'''context.forwardTo({java_name}, new ValueStorage.ForwardedPerBuffer(BVAR_{
                 field.upper()
             }, {predicate}));''')
     contents = replace_or_insert_region(
@@ -825,6 +863,67 @@ def export_initializations(
     )
 
     with open(buffer_output_file, 'w') as f:
+        f.write(contents)
+
+
+def export_frame_fields(
+        serializer: PESerializer,
+        frame_output_file: str,
+):
+    with open(frame_output_file, 'r') as f:
+        contents = f.read()
+    frame_fields = serializer.frame_fields
+    lines = []
+    for field, comment in frame_fields:
+        if comment is not None:
+            lines.append(f'    {_javadoc(comment, pre=True)}')
+        name = _c_name_to_java(field)
+        method = _c_name_to_java_class(field)
+        lines.append(f'    private Object {name} = false;')
+        lines.append(f'    public Object get{method}() {{ return {name}; }}')
+        lines.append(f'    public void set{method}(Object value) {{ {name} = value; }}')
+    contents = replace_or_insert_region(
+        contents,
+        'struct frame',
+        f'{'\n'.join(lines)}\n',
+    )
+    with open(frame_output_file, 'w') as f:
+        f.write(contents)
+
+
+def export_kboard_fields(
+        extraction: EmacsExtraction,
+        serializer: PESerializer,
+        symbols: dict[str, str],
+        kboard_output_file: str,
+):
+    fields = serializer.kboard_fields
+    contents = export_forwardable_locals(
+        kboard_output_file, fields,
+        'kboardLocalFields',
+        'KVAR_',
+        'struct kboard',
+    )
+    kboard_locals = {
+        var.c_name: var
+        for file in extraction.file_extractions
+        for var in file.per_kboard_variables
+    }
+    lines = []
+    for field, _ in fields:
+        if field in kboard_locals:
+            var = kboard_locals[field]
+            java_name = symbols[var.lisp_name]
+            lines.append(f'''context.forwardTo({java_name}, new ValueStorage.ForwardedPerKboard(KVAR_{
+                field.upper()
+            }));''')
+    contents = replace_or_insert_region(
+        contents,
+        'init_kboard_once',
+        f'        {'\n        '.join(lines)}\n',
+        indents=8,
+    )
+    with open(kboard_output_file, 'w') as f:
         f.write(contents)
 
 
@@ -888,7 +987,7 @@ EXISTING_SPECIALIZATION_PATTERN = (
     )
     + SkipTo('{')('line')
 )
-THIS_USAGE = re.compile(r'\bthis\b')
+THIS_USAGE = re.compile(r'\b(this|getContext|getLanguage|getStorage|getFunctionStorage)\b')
 
 
 def export_subroutines_in_file(extraction: FileContents, output: Path):
@@ -995,14 +1094,19 @@ def finalize(extraction: EmacsExtraction):
     parser = argparse.ArgumentParser()
     parser.add_argument('-C', '--constants', required=True, help='Constant output java file')
     parser.add_argument('-g', '--globals', required=True, help='Variable output java file')
-    parser.add_argument('-b', '--buffer', required=True, help='Buffer init output java file')
     parser.add_argument('-d', '--builtin-dir', required=True, help='Directory for java classes of subroutines')
+    parser.add_argument('--buffer', required=True, help='Buffer init output java file')
+    parser.add_argument('--frame', required=True, help='Frame init output java file')
+    parser.add_argument('--kboard', required=True, help='Kboard init output java file')
     args = parser.parse_args(get_unknown_cmd_flags())
 
     symbol_mapping = export_symbols(extraction, args.globals)
     constants = export_constants(extraction, symbol_mapping, args.constants)
     export_variables(extraction, constants, symbol_mapping, args.globals)
-    export_initializations(extraction, constants, symbol_mapping, args.globals, args.buffer)
+    serializer = export_initializations(extraction, constants, symbol_mapping, args.globals)
+    export_buffer_locals(extraction, symbol_mapping, serializer, args.buffer)
+    export_frame_fields(serializer, args.frame)
+    export_kboard_fields(extraction, serializer, symbol_mapping, args.kboard)
     export_subroutines(extraction, args.builtin_dir)
 
 

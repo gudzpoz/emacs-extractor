@@ -81,6 +81,8 @@ extracted_files = [
     'coding.h',
     'composite.h',
     'dispextern.h',
+    'frame.h',
+    'keyboard.h',
     'puresize.h',
     'syntax.h',
     '../lib/timespec.h',
@@ -408,6 +410,10 @@ file_specific_configs = {
             'emacs_bugreport': REPORT_BUG_ADDRESS,
         },
     ),
+    # frame.h
+    'frame.h': SpecificConfig(
+        extra_extraction=misc.extract_struct_frame,
+    ),
     # frame.c
     'syms_of_frame': SpecificConfig(
         transpile_replaces=[
@@ -417,6 +423,17 @@ file_specific_configs = {
             ),
         ],
         extra_extraction=misc.extract_frame_parms,
+    ),
+    'init_frame_once': SpecificConfig(
+        statement_remapper=lambda statements, pe: statements + [
+            PECFunctionCall('init_frame_fields', [cast(Any, pe['struct_frame_fields'])]),
+        ],
+    ),
+    # keyboard.h
+    'keyboard.h': SpecificConfig(
+        # This injects info about struct kboard into 'init_keyboard'
+        # as a 'struct_kboard_fields' global var (list[tuple[field_name_str, comment | None]]).
+        extra_extraction=misc.extract_struct_kboard,
     ),
     # keyboard.c
     'syms_of_keyboard': SpecificConfig(
@@ -432,6 +449,17 @@ file_specific_configs = {
             'XSYMBOL': lambda name: name,
             'allocate_kboard': lambda t: PECFunctionCall('allocate_kboard', [t]),
         },
+    ),
+    'init_keyboard': SpecificConfig(
+        # init_keyboard has tons of event/signal bindings.
+        # We simply ignore most of them.
+        transpile_replaces=[
+            r'^[^V]',
+            (r'internal_last_event_frame', 'Qnil'),
+        ],
+        statement_remapper=lambda statements, pe: statements + [
+            PECFunctionCall('init_kboard_fields', [cast(Any, pe['struct_kboard_fields'])]),
+        ],
     ),
     'init_while_no_input_ignore_events': SpecificConfig(
         transpile_replaces=[
@@ -659,8 +687,6 @@ set_config(
             'init_eval',
             # init_fileio: POSIX umask?
             'init_fileio',
-            # init_keyboard: tons of event/signal bindings
-            'init_keyboard',
             # init_syntax_once: tons of for loops
             'init_syntax_once',
             # init_timefns: set timezone, etc.

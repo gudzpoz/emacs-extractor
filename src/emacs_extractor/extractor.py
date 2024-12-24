@@ -30,6 +30,10 @@ class FileContents:
     '''Lisp variables defined in this file via `DEFVAR_PER_BUFFER` macros.
     Currently it seems only `buffer.c` uses this macro.'''
 
+    per_kboard_variables: list[LispVariable]
+    '''Lisp variables defined in this file via `DEFVAR_KBOARD` macros.
+    They seem to be "frame-local" or "display-local" variables.'''
+
     c_variables: list[CVariable]
     '''C Lisp_Object variables defined in this file.'''
 
@@ -162,7 +166,7 @@ class EmacsExtractor:
             tree = parse_c(remove_if_0(source).encode())
 
             # Variables
-            c, lisp, per_buffer = extract_variables(tree.root_node)
+            c, lisp, per_buffer, per_kboard = extract_variables(tree.root_node)
 
             # Subroutines
             functions = extract_subroutines(tree.root_node, global_constants)
@@ -185,6 +189,7 @@ class EmacsExtractor:
                 file=path.absolute(),
                 lisp_variables=lisp,
                 per_buffer_variables=per_buffer,
+                per_kboard_variables=per_kboard,
                 c_variables=c,
                 constants=file_constants,
                 functions=functions,
