@@ -103,6 +103,7 @@ extracted_files = [
     'comp.c',
     'composite.c',
     'data.c',
+    'dispnew.c',
     'doc.c',
     'editfns.c',
     'emacs.c',
@@ -678,6 +679,8 @@ set_config(
             'init_charset',
             # init_coding_once: coding categories, iso-2022, mule, etc.
             'init_coding_once',
+            # init_display: complicated frame init
+            'init_display',
             # init_editfns: user login names, etc.
             'init_editfns',
             # init_eval_once only initializes a local Lisp_Object (Vrun_hooks),

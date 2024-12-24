@@ -717,6 +717,9 @@ MANUALLY_IMPLEMENTED = {
     'init_charset': 'initCharset()',
     'init_syntax_once': 'builtInSyntax.initSyntaxOnce(ctx)',
 }
+ADDITIONALLY_IMPLEMENTED = {
+    'init_window_once': ['makeInitialWindowFrame();'],
+}
 
 
 def export_initializations(
@@ -733,6 +736,8 @@ def export_initializations(
         function = init.name
         java_function = _c_name_to_java(function)
         serialized = serializer.serialize(init)
+        if function in ADDITIONALLY_IMPLEMENTED:
+            serialized = serialized + ADDITIONALLY_IMPLEMENTED[function]
         if len(serialized) == 0:
             if function in MANUALLY_IMPLEMENTED:
                 calls.append(f'        {MANUALLY_IMPLEMENTED[function]};')

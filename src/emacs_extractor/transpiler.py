@@ -212,7 +212,10 @@ class CTranspiler:
                 pattern = (pattern, None)
             replaces.append((re.compile(pattern[0], re.MULTILINE), pattern[1]))
         self._replaces_stack.append(replaces)
+        try:
             transpiled = self._transpile_to_python(self.init_functions[named_function][0])
+        except Exception as e:
+            raise Exception(f'Failed to transpile `{named_function}`: {e}') from e
         self._replaces_stack.pop()
         return '\n'.join(transpiled)
 
@@ -309,7 +312,11 @@ class CTranspiler:
                         }')
                     continue
                 case 'return_statement':
-                    value = self._transpile_expression(require_single(child.named_children))
+                    children = child.named_children
+                    if len(children) == 0:
+                        value = 'return'
+                    else:
+                        value = self._transpile_expression(require_single(children))
                         value = f'return {value}'
                 case 'expression_statement':
                     if len(child.children) == 1:
