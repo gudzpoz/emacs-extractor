@@ -36,15 +36,14 @@ def extract_define_constants(
     defined: dict[str, CConstant] = update or {}
     for _, match in _DEFINE_CONSTANT_QUERY.matches(root):
         name = require_text(require_single(match['name']))
-        value = require_text(require_single(match['value'])).strip()
+        value = require_text(require_single(match['value'])).replace('\\\n', '').strip()
         try:
             v = eval(value, global_constants)
             if isinstance(v, int) or isinstance(v, str):
                 if name not in defined:
-                    if update is None:
-                        c = CConstant(name, v, value)
-                        constants.append(c)
-                        defined[name] = c
+                    c = CConstant(name, v, value)
+                    constants.append(c)
+                    defined[name] = c
                 else:
                     defined[name].value = v
                 global_constants[name] = v

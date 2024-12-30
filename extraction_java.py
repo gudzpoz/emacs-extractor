@@ -332,12 +332,18 @@ CONSTANT_GROUPS = {
     'syntaxcode',
     # coding.c
     'coding_category',
+    'iso_code_class_type',
 }
 CONSTANT_REGEXPS = {
     'lisp.h': ['CHAR_TABLE_STANDARD_SLOTS', 'MAX_CHAR', 'MAX_UNICODE_CHAR'],
+    'ccl.c': [r'CCL_\w+'],
     'character.h': ['MAX_._BYTE_CHAR'],
     'coding.h': [r'CODING_\w+_MASK'],
-    'coding.c': [r'CODING_ISO_FLAG_\w+'],
+    'coding.c': [
+        r'CODING_ISO_FLAG_\w+', r'ISO_CODE_\w+', r'CATEGORY_MASK_\w+',
+        r'EOL_SEEN_\w+',
+        r'UTF_8_BOM_\w+',
+    ],
 }
 
 
@@ -348,6 +354,8 @@ def export_constants(extraction: EmacsExtraction, symbols: dict[str, str], outpu
 
     java_symbols = set(symbols.values())
     encoded: dict[str, str] = {}
+    bound = re.compile(r'\b')
+    spaces = re.compile(r'\s+')
     for file in extraction.file_extractions:
         groups: list[str] = []
         group_constants: dict[str, list[CConstant]] = {}
@@ -376,7 +384,10 @@ def export_constants(extraction: EmacsExtraction, symbols: dict[str, str], outpu
                 encoded[constant.name] = java_name
                 assert isinstance(constant.value, int)
                 value = f'{constant.raw_value or constant.value}'
-                value = ' '.join(encoded.get(s, s) for s in value.split(' '))
+                if value.startswith('(') and value.endswith(')'):
+                    value = value[1:-1]
+                value = ' '.join(encoded.get(s, s) for s in bound.split(value))
+                value = spaces.sub(' ', value).strip()
                 region.append(f'public static final int {java_name} = {value};')
             contents = replace_or_insert_region(
                 contents, group,
@@ -597,7 +608,7 @@ class PESerializer:
                 return f'bufferDefaults.setCategoryTable({self._expr_to_java(args[0])})'
             case 'set_and_check_load_path':
                 assert len(args) == 0
-                return 'setAndCheckLoadPath()'
+                return 'checkLoadPath()'
             case 'init_dynlib_suffixes':
                 assert len(args) == 0
                 return 'initDynlibSuffixes()'
@@ -608,9 +619,9 @@ class PESerializer:
             case 'setup_coding_system':
                 assert len(args) == 2
                 assert self._expr_to_java(args[1]) == 'safeTerminalCoding'
-                return f'''builtInCoding.setupCodingSystem({
+                return f'''getCodings().safeTerminalCoding = getCodings().getCodingSystem({
                     self._expr_to_java(args[0])
-                }, builtInCoding.safeTerminalCoding)'''
+                })'''
             case 'allocate_kboard':
                 # TODO
                 return 'false /* TODO */'

@@ -174,14 +174,18 @@ class EmacsExtractor:
             # #define constants
             define_constants, defined = extract_define_constants(tree.root_node, global_constants)
 
+            tree_with_define = tree
             tree = self._preprocess(source, path.name)
-
-            # #define constants
-            extract_define_constants(tree.root_node, global_constants, defined)
 
             # Enum constants
             enum_constants = extract_enum_constants(tree.root_node, global_constants, self.ignored_constants)
             file_constants = enum_constants + define_constants
+            # #define constants, second pass
+            local_constants = dict(global_constants)
+            local_constants.update({c.name: c.value for c in file_constants})
+            file_constants.extend(
+                extract_define_constants(tree_with_define.root_node, local_constants, defined)[0],
+            )
             if file.endswith('.h'):
                 global_constants.update({c.name: c.value for c in file_constants})
 
