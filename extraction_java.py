@@ -216,7 +216,9 @@ def _c_var_name_to_java(c_name: str):
     return _c_name_to_java(c_name[1:] if c_name.startswith('V') else c_name)
 
 def _javadoc(docstring: str, pre: bool = False):
-    lines = escape_xml(docstring.replace('\t', '        ')).splitlines()
+    lines = escape_xml(
+        docstring.replace('\t', '        '),
+    ).replace('@', '&#64;').splitlines()
     doc_lines = ['     * <pre>'] if pre else []
     for line in lines:
         if line.strip() == '':
@@ -573,6 +575,8 @@ class PESerializer:
                     args[0] = PELiteral('null')
                 args[2] = args[2] != 0
                 return f'decodeEnvPath({self._java_arg_list(args)})'
+            case 'define_error':
+                return f'defineError({self._java_arg_list(args)})'
             case 'init_frame_fields':
                 assert len(args) == 1
                 assert all(isinstance(arg, tuple) for arg in cast(Any, args[0]))
@@ -1004,6 +1008,7 @@ EXISTING_SPECIALIZATION_PATTERN = (
     + SkipTo('{')('line')
 )
 THIS_USAGE = re.compile(r'\b(this|getContext|getLanguage|getStorage|getFunctionStorage)\b')
+CUSTOM_NODE_PATTERN = re.compile(r'^extends ELisp\w+FnsNode $')
 
 
 def export_subroutines_in_file(extraction: FileContents, output: Path):
@@ -1049,7 +1054,8 @@ def export_subroutines_in_file(extraction: FileContents, output: Path):
                 extends == 'extends ELispBuiltInBaseNode '
                 or extends == 'extends ELispBuiltInBaseNode '
                 'implements ELispBuiltInBaseNode.InlineFactory '
-            )
+                or CUSTOM_NODE_PATTERN.match(extends)
+            ), extends
             assert '@Specialization' in body
             impls = EXISTING_SPECIALIZATION_PATTERN.search_string(body)
             assert len(impls) >= 1, body

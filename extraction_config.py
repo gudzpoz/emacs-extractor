@@ -109,13 +109,16 @@ extracted_files = [
     'emacs.c',
     'eval.c',
     'fileio.c',
+    'filelock.c',
     'floatfns.c',
     'fns.c',
     'frame.c',
     'keyboard.c',
     'keymap.c',
+    'indent.c',
     'lread.c',
     'macros.c',
+    'marker.c',
     'minibuf.c',
     'print.c',
     'process.c',
@@ -123,6 +126,7 @@ extracted_files = [
     'syntax.c',
     'textprop.c',
     'timefns.c',
+    'treesit.c',
     'window.c',
     'xdisp.c',
     'xfaces.c',
@@ -148,6 +152,7 @@ PE_C_FUNCTIONS = {
     'char_table_set_range', # (Lisp_Object, int, int, Lisp_Object)
 
     'decode_env_path', # (const char * env_name, const char *default, bool empty)
+    'define_error', # (Lisp_Object error, const char *, Lisp_Object parent_error)
 }
 
 # Emacs uses a bunch of utility functions. To avoid having to implement all these
@@ -661,6 +666,11 @@ set_config(
             'GLYPH_LEN_MAX',
             # editfns.c
             'USEFUL_PRECISION_MAX',
+            # filelock.c
+            'LINKS_MIGHT_NOT_WORK',
+            'NEGATIVE_ERRNO',
+            'ANOTHER_OWNS_IT',
+            'I_OWN_IT',
             # lread.c
             'word_size_log2',
             # timefns.c
