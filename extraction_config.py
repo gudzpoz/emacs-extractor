@@ -89,6 +89,7 @@ extracted_files = [
 
     'alloc.c',
     'buffer.c',
+    'bytecode.c',
     'callint.c',
     'callproc.c',
     'casefiddle.c',

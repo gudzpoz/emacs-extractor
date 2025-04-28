@@ -1,4 +1,5 @@
 import dataclasses
+import re
 import typing
 
 from tree_sitter import Node, Query
@@ -108,6 +109,7 @@ def extract_enum_constants(root: Node, global_constants: dict[str, typing.Any], 
                     elif any(n in text for n in ignored):
                         ignored.append(name)
                         continue
+                    text = re.sub(r'\b0(\d+)\b', r'0o\1', text) # oct
                     value = eval(text, global_constants)
                     assert isinstance(value, int), f'{name}: {value}'
                     index = value
