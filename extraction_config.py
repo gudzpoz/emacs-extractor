@@ -125,6 +125,7 @@ extracted_files = [
     'process.c',
     'search.c',
     'syntax.c',
+    'terminal.c',
     'textprop.c',
     'timefns.c',
     'treesit.c',
