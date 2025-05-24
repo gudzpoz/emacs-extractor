@@ -149,6 +149,18 @@ def set_emacs_dir(emacs_dir: str):
     _emacs_dir = Path(emacs_dir)
     assert _emacs_dir.exists() and _emacs_dir.is_dir()
 
+def log_unextracted_files():
+    files = sorted(get_emacs_dir().glob('*.h')) + sorted(get_emacs_dir().glob('*.c'))
+    extracted = set(get_config().files)
+    files = [
+        file.name
+        for file in files
+        if file.name not in extracted
+    ]
+    print(f'''Unextracted files: [{
+        '' if not files else f'\n    "{'",\n    "'.join(files)}",\n'
+    }]''', file=sys.stderr)
+
 
 _unknown_cmd_flags: list[str] = []
 

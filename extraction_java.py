@@ -8,8 +8,10 @@ from xml.sax.saxutils import escape as escape_xml
 
 from pyparsing import (
     alphanums,
+    original_text_for,
     LineStart,
     Literal,
+    OneOrMore,
     QuotedString,
     SkipTo,
     Word,
@@ -20,7 +22,6 @@ from emacs_extractor.config import (
     get_unknown_cmd_flags, set_finalizer,
 )
 from emacs_extractor.partial_eval import *
-from emacs_extractor.utils import dataclass_deep_to_json
 
 
 if TYPE_CHECKING:
@@ -956,7 +957,9 @@ JAVA_NODE_MATCH = (
     + Literal('@ELispBuiltIn(name =')
     + QuotedString('"')('name')
     + SkipTo(')')('attrs') + ')'
-    + Literal('@GenerateNodeFactory')
+    + original_text_for(
+        OneOrMore('@' + SkipTo('\n'))
+    )('annotations')
     + Literal('public abstract static class')
     + Word('F', alphanums)('fname')
     + SkipTo('{')('extends') + '{'
@@ -1019,16 +1022,41 @@ def export_subroutines_in_file(extraction: FileContents, output: Path):
         for m in JAVA_NODE_MATCH.search_string(contents)
     )
 
+    # The `output` is structured like this (pseudocode):
+    # (class-start
+    #  (user-defined top-level-anything) ;; we should keep this part as is
+    #  (generated-subroutines  ;; this part is what we generate here
+    #   (subroutine#1
+    #    (generated-javadoc)
+    #    (generated-annotation "@ELispBuiltIn")
+    #    (user-annotation annotation-anything) ;; to be kept as is
+    #    (generated-annotation "@GenerateNodeFactory")
+    #    (generated-class
+    #     (user-defined class-attrs-anything) ;; to be kept as is
+    #     (generated-methods) ;; only generated for the first time
+    #                         ;; the user will modify it, and we will
+    #                         ;; need to keep it as is
+    #     )
+    #    ;; other subroutines
+    #    )
+    #   )
+    #  )
+
+    # Skip to the start of `generated-subroutines`.
+    # `(user-defined top-level-anything)` is stored into `original`.
     start = contents.find('\n    @ELispBuiltIn(name =')
     if start == -1:
+        # Generate for the first time
         original = contents[0:contents.rindex('}')]
     else:
+        # Skip back to the start of `(generated-javadoc)`
         original = contents[0:start]
         comment_end = original.rfind('*/')
         if original[comment_end:].strip() == '*/':
             trailing_comment_start = original.rfind('\n    /**\n')
             assert trailing_comment_start != -1
             original = original[0:trailing_comment_start]
+
     for subroutine in extraction.functions:
         assert subroutine.c_name.startswith('F')
         fname = f'F{_c_name_to_java_class(subroutine.c_name[1:])}'
@@ -1050,10 +1078,14 @@ def export_subroutines_in_file(extraction: FileContents, output: Path):
             assert info['attrs'] == attrs, (subroutine, info['attrs'], attrs)
             extends = info['extends']
             body = info['body']
+            annotations = info['annotations'].strip()
+            assert annotations.endswith('@GenerateNodeFactory'), annotations
             assert (
                 extends == 'extends ELispBuiltInBaseNode '
                 or extends == 'extends ELispBuiltInBaseNode '
                 'implements ELispBuiltInBaseNode.InlineFactory '
+                or extends == 'extends ELispBuiltInBaseNode '
+                'implements ELispBuiltInBaseNode.SpecialFactory '
                 or CUSTOM_NODE_PATTERN.match(extends)
             ), extends
             assert '@Specialization' in body
@@ -1084,10 +1116,11 @@ def export_subroutines_in_file(extraction: FileContents, output: Path):
         public static Void {_c_name_to_java(subroutine.c_name[1:])}({', '.join(args)}) {{
             throw new UnsupportedOperationException();
         }}'''
+            annotations = '@GenerateNodeFactory'
         original += f'''
     {javadoc}
     @ELispBuiltIn(name = "{subroutine.lisp_name}"{attrs})
-    @GenerateNodeFactory
+    {annotations}
     public abstract static class {fname} {extends}{{
         {body}
     }}

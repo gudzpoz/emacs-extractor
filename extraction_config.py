@@ -121,6 +121,7 @@ extracted_files = [
     'macros.c',
     'marker.c',
     'minibuf.c',
+    'pdumper.c',
     'print.c',
     'process.c',
     'search.c',
