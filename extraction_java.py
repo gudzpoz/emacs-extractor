@@ -81,7 +81,7 @@ def generate_java_symbol_init(symbols: list[tuple[str, str]], init_function: str
         for symbol in symbols
     )
     all_symbols = f'''
-    private ELispSymbol[] {init_function}() {{
+    private static ELispSymbol[] {init_function}() {{
         return new ELispSymbol[] {{
 {'\n'.join(f'            {symbol[0]},' for symbol in symbols)}
         }};
@@ -128,16 +128,27 @@ def export_symbols(extraction: EmacsExtraction, output_file: str):
     variable_symbols = sorted(variable_symbols)
     per_buffer_variables = sorted(per_buffer_variables)
 
-    for symbols, init_function, marker in [
+    symbol_sections = [
         (all_symbols, 'allSymbols', 'globals.h'),
         (variable_symbols, 'variableSymbols', 'variable symbols'),
         (per_buffer_variables, 'bufferLocalVarSymbols', 'buffer.c'),
-    ]:
+    ]
+    for symbols, init_function, marker in symbol_sections:
         contents = replace_or_insert_region(
             contents,
             marker,
             generate_java_symbol_init(symbols, init_function),
         )
+    contents = replace_or_insert_region(
+        contents,
+        'getAllSymbols',
+        f'''    public static ELispSymbol[][] getAllSymbols() {{
+        return new ELispSymbol[][]{{
+                {'\n                '.join(f'{section[1]}(),' for section in symbol_sections)}
+        }};
+    }}
+'''
+    )
     with open(output_file, 'w') as f:
         f.write(contents)
 
@@ -602,7 +613,7 @@ class PESerializer:
                 return None
             case 'init_buffer_once':
                 assert len(args) == 0
-                return 'ELispBuffer.initBufferLocalVars(ctx, bufferDefaults)'
+                return 'ELispBuffer.initBufferLocalVars(ctx, bufferDefaults, builtInBuffer)'
             case 'init_buffer_directory':
                 assert len(args) == 2
                 assert args[0] == 'current_buffer'
@@ -792,12 +803,11 @@ def export_forwardable_locals(
         array_field: str,
         const_prefix: str,
         tag: str,
-        extra: str = '',
 ):
     with open(output_file, 'r') as f:
         contents = f.read()
     buffer_region = f'''    private final Object[] {array_field};
-{extra}    {'\n    '.join(
+    {'\n    '.join(
         f'''{'' if comment is None
            else f'{_javadoc(comment)}\n    '
         }public final static int {const_prefix}{name.upper()} = {i};'''
@@ -826,14 +836,25 @@ def export_buffer_locals(
         symbols: dict[str, str],
         serializer: PESerializer,
         buffer_output_file: str,
+        buffer_builtin_file: str,
 ):
     properties, fields = serializer.buffer_local_properties
+
+    with open(buffer_builtin_file, 'r') as f:
+        contents = f.read()
+    contents = replace_or_insert_region(
+        contents,
+        'buffer_local_flags',
+        f'    public final byte[] bufferLocalFlags = new byte[{len(fields)}];\n',
+    )
+    with open(buffer_builtin_file, 'w') as f:
+        f.write(contents)
+
     contents = export_forwardable_locals(
         buffer_output_file, fields,
         'bufferLocalFields',
         'BVAR_',
         'struct buffer',
-        f'private static final byte[] BUFFER_LOCAL_FLAGS = new byte[{len(fields)}];\n',
     )
     buffer_fields = set(field for field, _ in fields)
     buffer_locals = {
@@ -856,14 +877,15 @@ def export_buffer_locals(
             lines.append(f'''defaultValues.set{_c_name_to_java_class(field)}({
                 prop.default
             });''')
+    lines.append('byte[] bufferLocalFlags = builtInBuffer.bufferLocalFlags;')
     for field, _ in fields:
         if field in buffer_properties:
             if buffer_properties[field].permanent_local:
-                lines.append(f'''BUFFER_LOCAL_FLAGS[BVAR_{
+                lines.append(f'''bufferLocalFlags[BVAR_{
                     field.upper()
                 }] = Byte.MIN_VALUE; // PERMANENT_LOCAL''')
             else:
-                lines.append(f'''BUFFER_LOCAL_FLAGS[BVAR_{field.upper()}] = {
+                lines.append(f'''bufferLocalFlags[BVAR_{field.upper()}] = {
                     buffer_properties[field].local_flag
                 };''')
     for field, _ in fields:
@@ -1099,6 +1121,8 @@ def export_subroutines_in_file(extraction: FileContents, output: Path):
                 line = line[line.index('(') + 1:line.rindex(')')]
                 if '@Cached' in line:
                     line = line.split('@Cached')[0]
+                if '@Bind' in line:
+                    line = line.split('@Bind')[0]
                 if 'VirtualFrame frame' in line:
                     line = line.replace('VirtualFrame frame', '')
                 assert '@' not in line, line
@@ -1159,10 +1183,12 @@ def finalize(extraction: EmacsExtraction):
     constants = export_constants(extraction, symbol_mapping, args.constants)
     export_variables(extraction, constants, symbol_mapping, args.globals)
     serializer = export_initializations(extraction, constants, symbol_mapping, args.globals)
-    export_buffer_locals(extraction, symbol_mapping, serializer, args.buffer)
+    builtin_dir = args.builtin_dir
+    buffer_builtin = str(Path(builtin_dir).joinpath("BuiltInBuffer.java"))
+    export_buffer_locals(extraction, symbol_mapping, serializer, args.buffer, buffer_builtin)
     export_frame_fields(serializer, args.frame)
     export_kboard_fields(extraction, serializer, symbol_mapping, args.kboard)
-    export_subroutines(extraction, args.builtin_dir)
+    export_subroutines(extraction, builtin_dir)
 
 
 set_finalizer(finalize)

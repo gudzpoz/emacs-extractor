@@ -104,6 +104,7 @@ extracted_files = [
     'comp.c',
     'composite.c',
     'data.c',
+    'dired.c',
     'dispnew.c',
     'doc.c',
     'editfns.c',
