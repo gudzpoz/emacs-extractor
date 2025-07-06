@@ -1,5 +1,14 @@
 #+title: emacs-extractor
 
+This repository includes the following utilities for Emacs reimplementers:
+
+- =emacs-extractor= :: Scripts to extract Emacs C subroutines, variables,
+  initialization logic from GNU Emacs source code.
+- =el-semi-fuzz= :: A script to generate conformance test cases to detect
+  behavioral discrepancies between GNU Emacs and your implementation.
+
+* =emacs-extractor=
+
 This is a set of simple python scripts to extract emacs C definitions from Emacs source code,
 including:
 
@@ -8,7 +17,7 @@ including:
 - Symbols defined by =DEFSYM=.
 - Subroutines defined by =DEFUN=, exported by =defsubr=.
 
-* Usage
+** Usage
 
 Please first build Emacs to have things like =globals.h= generated.
 
@@ -69,3 +78,32 @@ Instead of consuming the produced JSON file, one can also use the
 =-f/--finalizer= argument to supply a Python file to consume the Python objects
 (which comes with some type hints). An (incomplete) example is at
 [[file:extraction_java.py]].
+
+* =el-semi-fuzz=
+
+This script was inspired by [[https://github.com/CeleritasCelery/rune/tree/master/elprop][elprop from rune]]. Basically, it generates a bunch of
+random function calls for each Emacs subroutine tested, runs them in GNU Emacs
+for expected outcome, and prints them as test cases to be comsumed by your
+test implementation. For example, the following generates tests for the =car= subroutine:
+
+#+begin_src bash :results output :wrap src text
+  emacs -Q -nw -L . -l el-semi-fuzz --batch \
+        --eval '(esfuzz-run-fuzz "^data.c$" "^car$" t)'
+#+end_src
+
+#+RESULTS:
+#+begin_src text
+  42 (33 (car '"🤗\377") wrong-type-argument)
+  27 (124 (car '#1=(1 . #1#)) 1)
+  37 (33 (car '[nil]) wrong-type-argument)
+  ...
+#+end_src
+
+The default test generator assumes your implementation to fully support ELisp
+read syntax:
+
+- Big integers
+- Non-interned symbols (=(eq #:nil nil)= returns false)
+- Circular representation (=#1=(1 . #1#)= is a circular list)
+
+Of course, you may modify =esfuzz--basic-arg-types= to suit your needs.
