@@ -1119,6 +1119,7 @@ def export_subroutines_in_file(extraction: FileContents, output: Path):
                     assert THIS_USAGE.search(body) is not None, line
                     assert line.startswith('public '), line
                 line = line[line.index('(') + 1:line.rindex(')')]
+                line = line.replace('@Nullable', '')
                 if '@Cached' in line:
                     line = line.split('@Cached')[0]
                 if '@Bind' in line:
