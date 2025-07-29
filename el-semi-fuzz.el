@@ -59,13 +59,6 @@
 (require 'seq)
 (cl-float-limits)
 
-(cl-defmethod cl-print-object ((object symbol) stream)
-  (if (or (null object) (intern-soft object))
-      (prin1 object stream)
-    (princ "#:" stream)
-    (unless (length= (symbol-name object) 0)
-      (prin1 object stream))))
-
 (package-initialize)
 (setq debug-on-error t)
 (use-package promise
@@ -153,30 +146,36 @@ tested on Emacs 30 and might not run on other versions."
     (when void-functions
       (warn "void-functions: %S" void-functions))))
 
+(defun esfuzz--random (limit)
+  "Generates a random number similar to `random'.
+
+TODO: Use a seed for reproducible tests."
+  (random limit))
 (defun esfuzz--integer-generator (from to)
   "Returns a function that randomly generates integers."
-  (lambda () (+ from (random (1+ (- to from))))))
+  (lambda () (+ from (esfuzz--random (1+ (- to from))))))
 (defun esfuzz--float-generator (to)
   "Returns a functions that randomly generates floats."
   (let ((int-gen (esfuzz--integer-generator 0 to)))
     (lambda () (read (format "%s%d.%d"
-                             (if (= 0 (random 2)) "" "-")
+                             (if (= 0 (esfuzz--random 2)) "" "-")
                              (funcall int-gen) (funcall int-gen))))))
 (defun esfuzz--string-generator (from-length to-length unibyte)
   "Generates random strings."
   (let ((length-gen (esfuzz--integer-generator from-length to-length))
         (char-gen (pcase unibyte
-                    ('ascii (esfuzz--integer-generator 0 255))
+                    ('ascii (esfuzz--integer-generator 0 127))
                     ('t (esfuzz--integer-generator 0 255))
                     (`(,from . ,to) (esfuzz--integer-generator from to))
                     (_ (esfuzz--integer-generator 0 (max-char))))))
     (lambda ()
       (let ((length (funcall length-gen)))
-        (with-temp-buffer
-          (set-buffer-multibyte (not unibyte))
-          (dotimes (_ length)
-            (insert (funcall char-gen)))
-          (buffer-string))))))
+        (if (= 0 length) ""
+          (with-temp-buffer
+            (set-buffer-multibyte (not unibyte))
+            (dotimes (_ length)
+              (insert (funcall char-gen)))
+            (buffer-string)))))))
 (defvar esfuzz--all-symbols nil)
 (defun esfuzz--symbol-generator (status)
   "Returns random symbols.
@@ -192,7 +191,7 @@ STATUS can be :unintern, :intern or :variable."
          (let ((symbols (delq nil (mapcar (lambda (data) (intern-soft (cdr (assq 'lisp_name data))))
                                           (cdr (assq 'all_symbols esfuzz--extraction))))))
            (setq esfuzz--all-symbols (vconcat symbols))))
-       (aref esfuzz--all-symbols (random (length esfuzz--all-symbols)))))
+       (aref esfuzz--all-symbols (esfuzz--random (length esfuzz--all-symbols)))))
     (:variable
      (let (all-symbols)
        (lambda ()
@@ -200,7 +199,7 @@ STATUS can be :unintern, :intern or :variable."
            (let ((symbols (seq-mapcat (lambda (data) (cdr (assq 'lisp_variables data)))
                                       (cdr (assq 'file_extractions esfuzz--extraction)))))
              (setq all-symbols (vconcat (delq nil (mapcar #'esfuzz--subr-lisp-name symbols))))))
-         (aref all-symbols (random (length all-symbols))))))))
+         (aref all-symbols (esfuzz--random (length all-symbols))))))))
 (defun esfuzz--cons-generator ()
   "Returns a cons."
   (lambda () (cons (esfuzz--random-object) (esfuzz--random-object))))
@@ -349,7 +348,7 @@ entries from `characterp'."
 (defsubst esfuzz--random-in-list (list)
   "Get a random item from a list."
   (let ((length (length list)))
-    (nth (random length) list)))
+    (nth (esfuzz--random length) list)))
 (defsubst esfuzz--random-arg-type (predicate)
   (cond
    (predicate (cddr (assq predicate esfuzz--basic-arg-types)))
@@ -500,7 +499,7 @@ The communication protocol is simple. The controller encodes the
 function by double-prin1 it (because `read-minibuffer' cannot read
 across new lines), and the worker will print back tests and results (see
 `esfuzz--run-fuzz-function' for the format)."
-  (let ((print-circle t))
+  (let ((print-circle t) (print-gensym t) (print-escape-nonascii t))
     (condition-case nil
         (while-let ((function (read (read-minibuffer ""))))
           (esfuzz--run-fuzz-function function))
@@ -606,6 +605,8 @@ across new lines), and the worker will print back tests and results (see
                 info
               (dolist (i (cdr info) nil)
                 (let* ((print-circle t)
+                       (print-gensym t)
+                       (print-escape-nonascii t)
                        (s (cl-prin1-to-string i)))
                   (prin1 (string-bytes s))
                   (princ " ")
@@ -622,7 +623,9 @@ across new lines), and the worker will print back tests and results (see
            (push (lambda (result)
                    (when (not esfuzz--stream-output)
                      (dolist (entry (cdr result))
-                       (let ((print-circle t))
+                       (let ((print-circle t)
+                             (print-gensym t)
+                             (print-escape-nonascii t))
                          (cl-prin1 entry output))))
                    (when (zerop (setq n (1- n)))
                      (setq results-ready t)))))
@@ -655,6 +658,8 @@ test cases."
    ((not (byte-code-function-p (symbol-function 'esfuzz-run-fuzz)))
     (byte-compile-file esfuzz--script-file)))
   (let ((print-circle t)
+        (print-gensym t)
+        (print-escape-nonascii t)
         (esfuzz--stream-output stream)
         (file-functions (esfuzz--subroutines-per-file))
         promises)
