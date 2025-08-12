@@ -154,6 +154,15 @@ TODO: Use a seed for reproducible tests."
 (defun esfuzz--integer-generator (from to)
   "Returns a function that randomly generates integers."
   (lambda () (+ from (esfuzz--random (1+ (- to from))))))
+(defun esfuzz--char-generator (from to)
+  "Returns a function that generates valid char codes by excluding
+surrogate chars."
+  (let ((gen (esfuzz--integer-generator from to)))
+    (lambda ()
+      (let ((c #xD800))
+        (while (<= #xD800 c #xDFFF)
+          (setq c (funcall gen)))
+        c))))
 (defun esfuzz--float-generator (to)
   "Returns a functions that randomly generates floats."
   (let ((int-gen (esfuzz--integer-generator 0 to)))
@@ -164,10 +173,10 @@ TODO: Use a seed for reproducible tests."
   "Generates random strings."
   (let ((length-gen (esfuzz--integer-generator from-length to-length))
         (char-gen (pcase unibyte
-                    ('ascii (esfuzz--integer-generator 0 127))
-                    ('t (esfuzz--integer-generator 0 255))
-                    (`(,from . ,to) (esfuzz--integer-generator from to))
-                    (_ (esfuzz--integer-generator 0 (max-char))))))
+                    ('ascii (esfuzz--char-generator 0 127))
+                    ('t (esfuzz--char-generator 0 255))
+                    (`(,from . ,to) (esfuzz--char-generator from to))
+                    (_ (esfuzz--char-generator 0 (max-char))))))
     (lambda ()
       (let ((length (funcall length-gen)))
         (if (= 0 length) ""
@@ -207,7 +216,7 @@ STATUS can be :unintern, :intern or :variable."
   "Returns a cons.
 
 The CONSTRUCTOR is to be called like (funcall CONSTRUCTOR random-list)."
-  (let ((int-gen (esfuzz--integer-generator 0 (or max-length 100))))
+  (let ((int-gen (esfuzz--integer-generator 0 (or max-length 10))))
     (lambda ()
       (let* ((length (funcall int-gen))
              (list (mapcar #'esfuzz--random-object (make-list length nil))))
