@@ -64,8 +64,8 @@ PATH_DOC = PATH_DATA # `doc-directory`
 PATH_EXEC = f'/usr/lib/emacs/{EMACS_VERSION}/{SYSTEM_CONFIGURATION}' # `exec-directory`
 
 # data.c
-MOST_POSITIVE_FIXNUM = 0x7fffffff # `most-positive-fixnum`
-MOST_NEGATIVE_FIXNUM = -MOST_POSITIVE_FIXNUM - 1 # `most-negative-fixnum`
+MOST_POSITIVE_FIXNUM = PELiteral('Long.MAX_VALUE') # `most-positive-fixnum`
+MOST_NEGATIVE_FIXNUM = PELiteral('Long.MIN_VALUE') # `most-negative-fixnum`
 
 #############
 ### Files ###
@@ -127,6 +127,7 @@ extracted_files = [
     'process.c',
     'search.c',
     'syntax.c',
+    'term.c',
     'terminal.c',
     'textprop.c',
     'timefns.c',
