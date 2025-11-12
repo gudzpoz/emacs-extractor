@@ -251,6 +251,10 @@ ALLOWED_GLOBAL_C_VARS = {
     'regular_top_level_message': None,
     'Vcoding_category_table': None,
 }
+COMPUTED_VARIABLES = {
+    'gcs-done': 'new GcsDone()',
+    'gc-elapsed': 'new GcElapsed()',
+}
 
 
 def export_variables(extraction: EmacsExtraction, constants: dict[str, str], symbols: dict[str, str], output_file: str):
@@ -271,7 +275,8 @@ def export_variables(extraction: EmacsExtraction, constants: dict[str, str], sym
             java_name = _c_name_to_java(c_name)
             suffix = ''
             init = ''
-            match var.lisp_type:
+            ty = 'COMPUTED' if var.lisp_name in COMPUTED_VARIABLES else var.lisp_type
+            match ty:
                 case 'INT':
                     t = 'ForwardedLong'
                     init_value = var.init_value
@@ -299,6 +304,9 @@ def export_variables(extraction: EmacsExtraction, constants: dict[str, str], sym
                             init = f'new ELispString({json.dumps(s)})'
                         case _:
                             assert var.init_value is None, var.init_value
+                case 'COMPUTED':
+                    t = 'ComputedForward'
+                    init = COMPUTED_VARIABLES[var.lisp_name]
             var_defs.append(
                 f'    private final ValueStorage.{t} {java_name} = '
                 f'new ValueStorage.{t}({init});{suffix}'
