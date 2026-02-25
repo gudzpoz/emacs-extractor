@@ -1,4 +1,4 @@
-from tree_sitter import Node, Query
+from tree_sitter import Node, Query, QueryCursor
 from emacs_extractor.config import SpecificConfig
 from emacs_extractor.partial_eval import PELispSymbol
 from emacs_extractor.utils import C_LANG, require_single, require_text, trim_doc
@@ -32,7 +32,7 @@ def _extract_string_array(root: Node, var_name: str):
   (initializer_list) @values
  )
 )''')
-    _, match = require_single(query.matches(root))
+    _, match = require_single(QueryCursor(query).matches(root))
     strings = []
     for item in require_single(match['values']).named_children:
         if item.text == b'0':
@@ -48,7 +48,7 @@ def extract_frame_parms(
         root: Node,
         symbol_mapping: dict[str, LispSymbol]
 ):
-    _, match = require_single(FRAME_PARMS_QUERY.matches(root))
+    _, match = require_single(QueryCursor(FRAME_PARMS_QUERY).matches(root))
     symbols = []
     for item in require_single(match['values']).named_children:
         assert item.type == 'initializer_list'
@@ -87,7 +87,7 @@ def extract_keyboard_c(
     if config.extra_globals is None:
         config.extra_globals = {}
 
-    _, match = require_single(KEYBOARD_HEAD_TABLE_QUERY.matches(root))
+    _, match = require_single(QueryCursor(KEYBOARD_HEAD_TABLE_QUERY).matches(root))
     event_heads = []
     for item in require_single(match['values']).named_children:
         if item.type == 'comment':
@@ -108,7 +108,7 @@ def extract_keyboard_c(
 
 
 def extract_struct(root: Node, query: Query, config: SpecificConfig, var_name: str, suffixed: bool = True):
-    _, match = require_single(query.matches(root))
+    _, match = require_single(QueryCursor(query).matches(root))
     struct_fields: list[tuple[str, str | None]] = []
     last_comment, last_comment_line = None, -1
     for field in require_single(match['fields']).named_children:

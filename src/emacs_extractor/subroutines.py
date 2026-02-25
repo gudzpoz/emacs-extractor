@@ -2,7 +2,7 @@ import dataclasses
 import re
 import typing
 
-from tree_sitter import Node, Query
+from tree_sitter import Node, Query, QueryCursor
 
 from emacs_extractor.utils import C_LANG, parse_c, require_single, require_text, trim_doc
 
@@ -77,7 +77,7 @@ def extract_signature(args_node: Node, doc: str, expected: int):
 
     declaration = f'void f {require_text(args_node)};'
     parsed = parse_c(declaration.encode())
-    _, match = require_single(_PARSED_DECLARATION_QUERY.matches(parsed.root_node))
+    _, match = require_single(QueryCursor(_PARSED_DECLARATION_QUERY).matches(parsed.root_node))
     args = [arg for arg in require_single(match['args']).children if arg.type == 'parameter_declaration']
     is_void = False
     is_var_args = False
@@ -119,7 +119,7 @@ _DEFSUBR_QUERY = Query(C_LANG, r'''
 def extract_subroutines(root: Node, global_variables: dict[str, typing.Any]):
     mapping: dict[str, Subroutine] = {}
     subroutines: list[Subroutine] = []
-    for _, match in _DEFUN_QUERY.matches(root):
+    for _, match in QueryCursor(_DEFUN_QUERY).matches(root):
         lisp_name = eval(require_text(match['lisp_name']))
         c_name = require_text(match['c_name'])
         symbol_c_name = require_text(match['symbol_c_name'])
@@ -133,7 +133,7 @@ def extract_subroutines(root: Node, global_variables: dict[str, typing.Any]):
         subr = Subroutine(lisp_name, c_name, symbol_c_name, min_args, max_args, int_spec, doc, args)
         mapping[symbol_c_name] = subr
         subroutines.append(subr)
-    for _, match in _DEFSUBR_QUERY.matches(root):
+    for _, match in QueryCursor(_DEFSUBR_QUERY).matches(root):
         symbol_c_name = require_text(match['symbol_c_name'])
         assert symbol_c_name in mapping, symbol_c_name
         subr = mapping[symbol_c_name]

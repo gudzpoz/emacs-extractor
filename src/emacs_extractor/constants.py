@@ -2,7 +2,7 @@ import dataclasses
 import re
 import typing
 
-from tree_sitter import Node, Query
+from tree_sitter import Node, Query, QueryCursor
 
 from emacs_extractor.utils import C_LANG, require_not_none, require_single, require_text
 
@@ -35,7 +35,7 @@ def extract_define_constants(
     global_constants = dict(global_constants)
     constants: list[CConstant] = []
     defined: dict[str, CConstant] = update or {}
-    for _, match in _DEFINE_CONSTANT_QUERY.matches(root):
+    for _, match in QueryCursor(_DEFINE_CONSTANT_QUERY).matches(root):
         name = require_text(require_single(match['name']))
         value = require_text(require_single(match['value'])).replace('\\\n', '').strip()
         try:
@@ -70,7 +70,7 @@ def extract_enum_constants(root: Node, global_constants: dict[str, typing.Any], 
     global_constants = dict(global_constants)
     constants: list[CConstant] = []
     ignored: list[str] = []
-    for _, match in _ENUM_CONSTANT_QUERY.matches(root):
+    for _, match in QueryCursor(_ENUM_CONSTANT_QUERY).matches(root):
         index = 0
         enum_list = match['list']
         group = None

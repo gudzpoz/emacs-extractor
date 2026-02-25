@@ -2,7 +2,7 @@ import dataclasses
 import re
 import typing
 
-from tree_sitter import Node, Query
+from tree_sitter import Node, Query, QueryCursor
 
 from emacs_extractor.constants import extract_define_constants
 from emacs_extractor.utils import C_LANG, get_declarator, parse_c, require_not_none, require_single, require_text
@@ -128,7 +128,7 @@ def extract_variables(root_node: Node):
     buffer_locals: list[PerBufferVariable] = []
     kboard_locals: list[LispVariable] = []
     lisp_variables: list[LispVariable] = []
-    for _, match in _DEFVAR_MATCH_QUERY.matches(root_node):
+    for _, match in QueryCursor(_DEFVAR_MATCH_QUERY).matches(root_node):
         nodes = match['node']
         macros = match['macro']
         assert len(nodes) == 1 and len(macros) == 1
@@ -137,7 +137,7 @@ def extract_variables(root_node: Node):
         assert macro in _DEFVAR_KINDS, macro
         kind = _DEFVAR_KINDS[macro]
         if kind == 'PER_BUFFER':
-            matches = _DEFVAR_PER_BUFFER_CAPTURE_QUERY.matches(node)
+            matches = QueryCursor(_DEFVAR_PER_BUFFER_CAPTURE_QUERY).matches(node)
             assert len(matches) == 1, node.text
             _, match = matches[0]
             buffer_locals.append(PerBufferVariable(
@@ -146,7 +146,7 @@ def extract_variables(root_node: Node):
                 predicate=require_text(match['predicate']),
             ))
         else:
-            matches = _DEFVAR_GLOBAL_CAPTURE_QUERY.matches(node)
+            matches = QueryCursor(_DEFVAR_GLOBAL_CAPTURE_QUERY).matches(node)
             assert len(matches) == 1, require_text(node)
             _, match = matches[0]
             kind = typing.cast(LISP_VAR_TYPES, kind)
@@ -181,7 +181,7 @@ def extract_symbols(globals_h: str) -> list[LispSymbol]:
     globals_h_root_node = parse_c(globals_h.encode()).root_node
     symbol_c_names = _DEFSYM_PATTERN.findall(globals_h)
     symbol_lisp_names = []
-    for _, match in _DEFSYM_NAME_QUERY.matches(globals_h_root_node):
+    for _, match in QueryCursor(_DEFSYM_NAME_QUERY).matches(globals_h_root_node):
         if require_text(get_declarator(require_single(match['node']))) == 'defsym_name':
             name_list = require_single(match['node']).child_by_field_name('value')
             assert name_list is not None and name_list.type == 'initializer_list'

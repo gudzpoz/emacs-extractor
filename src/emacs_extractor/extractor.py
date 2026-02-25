@@ -4,7 +4,7 @@ import typing
 from os import PathLike
 from pathlib import Path
 
-from tree_sitter import Query, Node
+from tree_sitter import Node, Query, QueryCursor
 
 from emacs_extractor.constants import extract_define_constants, CConstant, extract_enum_constants
 from emacs_extractor.subroutines import extract_subroutines, Subroutine
@@ -113,11 +113,11 @@ class EmacsExtractor:
         with open(Path(self.directory).joinpath(_MAIN_FUNCTION_FILE), 'r') as f:
             source = f.read()
         tree = self._preprocess(source, 'emacs.c')
-        _, match = require_single(_MAIN_FUNCTION_QUERY.matches(tree.root_node))
+        _, match = require_single(QueryCursor(_MAIN_FUNCTION_QUERY).matches(tree.root_node))
         body = require_single(match['def']).child_by_field_name('body')
         assert body is not None
         init_calls: list[tuple[int, typing.Literal['comment', 'init'], str]] = [] # (line, type, text)
-        for _, match in _INIT_CALL_QUERY.matches(body):
+        for _, match in QueryCursor(_INIT_CALL_QUERY).matches(body):
             node = require_single(match['node'])
             prev = node.prev_sibling
             if prev is not None and prev.type == 'comment':
@@ -207,7 +207,7 @@ class EmacsExtractor:
 
     def _extract_init_functions(self, root: Node, file: FileContents):
         functions: dict[str, tuple[Node, FileContents]] = {}
-        for _, match in _INIT_FUNCTION_DEF_QUERY.matches(root):
+        for _, match in QueryCursor(_INIT_FUNCTION_DEF_QUERY).matches(root):
             name = require_text(match['init'])
             if name.startswith('init_') or name.startswith('syms_of_'):
                 functions[name] = (require_single(match['node']), file)
